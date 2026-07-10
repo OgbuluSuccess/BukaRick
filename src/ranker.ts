@@ -99,5 +99,10 @@ export async function filterAndRank(
     })
   );
 
-  return shortlist.sort((a, b) => b.score - a.score).slice(0, intent.count);
+  // select the best by score, then present newest → oldest
+  // (unknown age = Infinity, sinks to the bottom)
+  return shortlist
+    .sort((a, b) => b.score - a.score)
+    .slice(0, intent.count)
+    .sort((a, b) => a.ageMinutes - b.ageMinutes);
 }

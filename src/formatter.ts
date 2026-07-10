@@ -28,12 +28,13 @@ export function formatReply(tokens: RankedToken[], header?: string): string {
       `${i + 1}. <b>${esc(t.pair.baseToken.symbol)}</b> ` +
       `(${fmtMcap(mcap)}) — ${fmtAge(t.ageMinutes)}, ` +
       `${t.pair.chainId}${tag}\n` +
-      `   vol/mcap: ${t.volToMcap.toFixed(2)} · <a href="${t.pair.url}">chart</a>`
+      `   vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
+      `<a href="${t.pair.url}">chart</a>`
     );
   });
 
   return [
-    header ?? "fresh pulls, ranked by my signals:",
+    header ?? "fresh pulls, newest first, filtered by my signals:",
     "",
     ...lines,
     "",
@@ -47,6 +48,21 @@ function esc(s: string): string {
 
 function fmtPct(n: number): string {
   return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+/**
+ * vol/mcap read on a 24h window, computed per coin:
+ *   < 0.5  ❄️ quiet    — nobody's trading it, dead or dying
+ *   0.5-1  🌤 warm     — some attention, watchlist tier
+ *   1-3    🔥 hot      — trading its own mcap daily, real interest
+ *   >= 3   🌋 blazing  — disproportionate action; either the play
+ *                        or a wash-traded trap. check buys vs sells.
+ */
+export function volSignal(ratio: number): string {
+  if (ratio >= 3) return "🌋 blazing";
+  if (ratio >= 1) return "🔥 hot";
+  if (ratio >= 0.5) return "🌤 warm";
+  return "❄️ quiet";
 }
 
 /**
@@ -100,7 +116,10 @@ export function formatTokenCard(
 
   const meta: string[] = [];
   if (ageMin !== null) meta.push(`⏳ Age: ${fmtAge(ageMin).replace(" old", "")}`);
-  if (mcap > 0) meta.push(`🔥 vol/mcap: ${((vol?.h24 ?? 0) / mcap).toFixed(2)}`);
+  if (mcap > 0) {
+    const ratio = (vol?.h24 ?? 0) / mcap;
+    meta.push(`vol/mcap: ${ratio.toFixed(2)} ${volSignal(ratio)}`);
+  }
   if (meta.length) lines.push(meta.join(" · "));
 
   if (holders) {
