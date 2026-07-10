@@ -24,44 +24,56 @@ export async function searchPairs(query: string): Promise<TokenPair[]> {
   return data.pairs ?? [];
 }
 
+type TokenRef = { chainId: string; tokenAddress: string };
+
 /**
  * Latest boosted/profiled tokens — decent proxy for "what's fresh".
  * Returns token addresses; you then hydrate them with pair data.
  */
-export async function latestTokenProfiles(): Promise<
-  { chainId: string; tokenAddress: string }[]
-> {
+export async function latestTokenProfiles(): Promise<TokenRef[]> {
   return get(`/token-profiles/latest/v1`);
 }
 
-/** Hydrate token addresses into full pair data (max 30 per call). */
+/** Hydrate token addresses into full pair data (30 per call, chunked). */
 export async function pairsForTokens(
   chainId: string,
   addresses: string[]
 ): Promise<TokenPair[]> {
-  const chunk = addresses.slice(0, 30).join(",");
-  const data = await get<TokenPair[]>(`/tokens/v1/${chainId}/${chunk}`);
-  return data ?? [];
+  const pairs: TokenPair[] = [];
+  for (let i = 0; i < addresses.length; i += 30) {
+    const chunk = addresses.slice(i, i + 30).join(",");
+    const data = await get<TokenPair[]>(`/tokens/v1/${chainId}/${chunk}`);
+    pairs.push(...(data ?? []));
+  }
+  return pairs;
 }
 
 /**
- * "All chain play": fan out a few generic searches + latest profiles,
- * merge, dedupe. Crude but effective for an MVP feed.
+ * "All chain play": merge the free discovery feeds (latest profiles +
+ * boosted tokens), hydrate, dedupe. Crude but effective for an MVP feed.
  */
 export async function freshFeed(): Promise<TokenPair[]> {
-  const profiles = await latestTokenProfiles();
+  const sources = await Promise.allSettled([
+    latestTokenProfiles(),
+    get<TokenRef[]>(`/token-boosts/latest/v1`),
+    get<TokenRef[]>(`/token-boosts/top/v1`),
+  ]);
+  const refs: TokenRef[] = [];
+  for (const s of sources) {
+    if (s.status === "fulfilled") refs.push(...s.value);
+  }
 
-  // group addresses by chain, hydrate in parallel
-  const byChain = new Map<string, string[]>();
-  for (const p of profiles) {
-    const list = byChain.get(p.chainId) ?? [];
-    list.push(p.tokenAddress);
-    byChain.set(p.chainId, list);
+  // group unique addresses by chain, hydrate in parallel
+  const byChain = new Map<string, Set<string>>();
+  for (const r of refs) {
+    const set = byChain.get(r.chainId) ?? new Set();
+    set.add(r.tokenAddress);
+    byChain.set(r.chainId, set);
   }
 
   const results = await Promise.allSettled(
     [...byChain.entries()].map(([chain, addrs]) =>
-      pairsForTokens(chain, addrs)
+      pairsForTokens(chain, [...addrs])
     )
   );
 
