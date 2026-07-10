@@ -8,12 +8,15 @@ import { holderConcentration } from "./holders.js";
  */
 export async function filterAndRank(
   pairs: TokenPair[],
-  intent: QueryIntent
+  intent: QueryIntent,
+  exclude?: Set<string> // "chain:address" keys to bench (already shown)
 ): Promise<RankedToken[]> {
   const now = Date.now();
   const ranked: RankedToken[] = [];
 
   for (const p of pairs) {
+    if (exclude?.has(`${p.chainId}:${p.baseToken.address.toLowerCase()}`))
+      continue;
     const mcap = p.marketCap ?? p.fdv ?? 0;
     const liq = p.liquidity?.usd ?? 0;
     const vol24 = p.volume?.h24 ?? 0;

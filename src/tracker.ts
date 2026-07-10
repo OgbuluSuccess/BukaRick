@@ -108,9 +108,11 @@ export async function buildReport(day: string): Promise<ReportData | null> {
   if (entries.length === 0) return { day, totalSightings: 0, rows: [] };
 
   // dedupe: keep the EARLIEST sighting (the honest entry point)
+  // lowercase: gecko-sourced picks log lowercase EVM addresses,
+  // dexscreener returns checksummed — keys must match anyway
   const byToken = new Map<string, ReportRow>();
   for (const e of entries) {
-    const key = `${e.chainId}:${e.tokenAddress}`;
+    const key = `${e.chainId}:${e.tokenAddress.toLowerCase()}`;
     const row = byToken.get(key);
     if (row) {
       row.sightings++;
@@ -141,7 +143,7 @@ export async function buildReport(day: string): Promise<ReportData | null> {
   const best = new Map<string, TokenPair>();
   for (const pairs of batches) {
     for (const p of pairs) {
-      const key = `${p.chainId}:${p.baseToken.address}`;
+      const key = `${p.chainId}:${p.baseToken.address.toLowerCase()}`;
       const prev = best.get(key);
       if (!prev || (p.liquidity?.usd ?? 0) > (prev.liquidity?.usd ?? 0)) {
         best.set(key, p);

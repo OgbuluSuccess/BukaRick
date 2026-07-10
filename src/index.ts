@@ -2,7 +2,7 @@ import { Bot } from "grammy";
 import { parseIntent } from "./parser.js";
 import { searchPairs, freshFeed, pairsForAddress } from "./dexscreener.js";
 import { chainFeed } from "./geckoterminal.js";
-import type { TokenPair } from "./types.js";
+import type { RankedToken, TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
 import { formatReply, formatTokenCard, formatReport } from "./formatter.js";
 import { holderConcentration } from "./holders.js";
@@ -10,6 +10,30 @@ import { logPicks, buildReport, resolveDay } from "./tracker.js";
 
 // EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
 const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
+
+// per-chat rotation: a coin shown to a chat is benched for ROTATION_MS
+// so repeat scans surface the next-best instead of the same list.
+// in-memory — a restart clears the bench, which is fine.
+const ROTATION_MS = 45 * 60_000;
+const recentlyShown = new Map<number, Map<string, number>>();
+
+const coinKey = (p: TokenPair) =>
+  `${p.chainId}:${p.baseToken.address.toLowerCase()}`;
+
+function benched(chatId: number): Set<string> {
+  const m = recentlyShown.get(chatId);
+  if (!m) return new Set();
+  const cutoff = Date.now() - ROTATION_MS;
+  for (const [k, t] of m) if (t < cutoff) m.delete(k);
+  return new Set(m.keys());
+}
+
+function bench(chatId: number, tokens: RankedToken[]): void {
+  const m = recentlyShown.get(chatId) ?? new Map<string, number>();
+  const now = Date.now();
+  for (const t of tokens) m.set(coinKey(t.pair), now);
+  recentlyShown.set(chatId, m);
+}
 
 const token = process.env.BOT_TOKEN;
 if (!token) throw new Error("Set BOT_TOKEN (get one from @BotFather)");
@@ -124,12 +148,14 @@ bot.on("message:text", async (ctx) => {
       return merged;
     };
 
+    const exclude = benched(ctx.chat.id);
+
     // keyword query → search; otherwise → broad feed
-    const pairs = intent.keyword
+    let pairs = intent.keyword
       ? await searchPairs(intent.keyword)
       : await broadFeed();
 
-    let ranked = await filterAndRank(pairs, intent);
+    let ranked = await filterAndRank(pairs, intent, exclude);
 
     let header = intent.keyword
       ? `pulled matches for "${intent.keyword}":`
@@ -139,11 +165,29 @@ bot.on("message:text", async (ctx) => {
     // mcap band, so a literal search for X filters to nothing — fall
     // back to the broad feed with the same filters instead
     if (ranked.length === 0 && intent.keyword) {
-      ranked = await filterAndRank(await broadFeed(), intent);
+      pairs = await broadFeed();
+      ranked = await filterAndRank(pairs, intent, exclude);
       if (ranked.length > 0) {
         header = `nothing matching "${intent.keyword}" fit the filter — pulling the fresh feed instead:`;
       }
     }
+
+    // every survivor is benched from earlier scans → re-serve the
+    // leaders rather than replying empty, but say so
+    if (ranked.length === 0 && exclude.size > 0) {
+      ranked = await filterAndRank(pairs, intent);
+      if (ranked.length > 0) {
+        header =
+          "nothing new since your last scan — same names still leading:";
+      }
+    } else if (!header && ranked.length > 0) {
+      const benchedHits = pairs.filter((p) => exclude.has(coinKey(p))).length;
+      if (benchedHits > 0) {
+        header = `fresh batch — benched ${benchedHits} you've already seen:`;
+      }
+    }
+
+    bench(ctx.chat.id, ranked);
 
     // log every shown coin so /report can score it later
     logPicks(ranked, text).catch(console.error);
