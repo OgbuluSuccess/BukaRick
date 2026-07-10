@@ -96,7 +96,7 @@ export async function freshFeed(): Promise<TokenPair[]> {
   // dedupe by base token address
   const seen = new Set<string>();
   return pairs.filter((p) => {
-    const key = `${p.chainId}:${p.baseToken.address}`;
+    const key = `${p.chainId}:${p.baseToken.address.toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
