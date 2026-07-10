@@ -1,8 +1,12 @@
 import { Bot } from "grammy";
 import { parseIntent } from "./parser.js";
-import { searchPairs, freshFeed } from "./dexscreener.js";
+import { searchPairs, freshFeed, pairsForAddress } from "./dexscreener.js";
 import { filterAndRank } from "./ranker.js";
-import { formatReply } from "./formatter.js";
+import { formatReply, formatTokenCard } from "./formatter.js";
+import { holderConcentration } from "./holders.js";
+
+// EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
+const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
 
 const token = process.env.BOT_TOKEN;
 if (!token) throw new Error("Set BOT_TOKEN (get one from @BotFather)");
@@ -14,7 +18,8 @@ bot.command("start", (ctx) =>
     "send me something like:\n" +
     '"microcaps under 250k, fresh, like 10"\n' +
     '"sol degens under 100k"\n' +
-    '"coins like THROBBIN"'
+    '"coins like THROBBIN"\n' +
+    "or paste a contract address for the full card"
   )
 );
 
@@ -25,6 +30,31 @@ bot.on("message:text", async (ctx) => {
   await ctx.replyWithChatAction("typing");
 
   try {
+    // pasted contract address → single-token card (the "Rick" move)
+    const addrMatch = text.match(ADDRESS_RE);
+    if (addrMatch) {
+      const pairs = await pairsForAddress(addrMatch[1]);
+      if (pairs.length === 0) {
+        await ctx.reply(
+          "can't find that CA on dexscreener. too new, wrong chain, or already dead."
+        );
+        return;
+      }
+      // most liquid pair is the canonical one
+      const best = [...pairs].sort(
+        (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0)
+      )[0];
+      const holders = await holderConcentration(
+        best.chainId,
+        best.baseToken.address
+      );
+      await ctx.reply(formatTokenCard(best, holders, pairs.length), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
+      return;
+    }
+
     const intent = parseIntent(text);
 
     // keyword query → search; otherwise → fresh feed across chains

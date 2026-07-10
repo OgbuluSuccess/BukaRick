@@ -27,6 +27,17 @@ export async function searchPairs(query: string): Promise<TokenPair[]> {
 type TokenRef = { chainId: string; tokenAddress: string };
 
 /**
+ * All pairs for a pasted contract address — cross-chain lookup.
+ * This is the "Rick card" path: paste a CA, get the token.
+ */
+export async function pairsForAddress(address: string): Promise<TokenPair[]> {
+  const data = await get<{ pairs: TokenPair[] | null }>(
+    `/latest/dex/tokens/${encodeURIComponent(address)}`
+  );
+  return data.pairs ?? [];
+}
+
+/**
  * Latest boosted/profiled tokens — decent proxy for "what's fresh".
  * Returns token addresses; you then hydrate them with pair data.
  */

@@ -1,5 +1,6 @@
 export interface TokenPair {
   chainId: string;          // "solana", "base", "ethereum", "bsc"...
+  dexId?: string;           // "uniswap", "raydium"...
   pairAddress: string;
   baseToken: { address: string; name: string; symbol: string };
   priceUsd: string;
@@ -16,6 +17,11 @@ export interface TokenPair {
   };
   pairCreatedAt?: number;   // unix ms
   url: string;              // dexscreener link
+  info?: {
+    imageUrl?: string;
+    websites?: { url: string }[];
+    socials?: { type: string; url: string }[];
+  };
 }
 
 export interface QueryIntent {
