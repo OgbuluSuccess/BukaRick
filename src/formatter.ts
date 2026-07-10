@@ -1,4 +1,5 @@
 import type { RankedToken, TokenPair } from "./types.js";
+import type { ReportData } from "./tracker.js";
 
 function fmtMcap(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -63,6 +64,86 @@ export function volSignal(ratio: number): string {
   if (ratio >= 1) return "🔥 hot";
   if (ratio >= 0.5) return "🌤 warm";
   return "❄️ quiet";
+}
+
+function fmtX(x: number): string {
+  return `${x >= 10 ? x.toFixed(1) : x.toFixed(2)}x`;
+}
+
+function xEmoji(x: number): string {
+  if (x >= 2) return "🚀";
+  if (x >= 1.2) return "🟢";
+  if (x >= 0.8) return "😐";
+  return "🔻";
+}
+
+function fmtClock(iso: string): string {
+  const d = new Date(iso);
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+function fmtAgo(iso: string): string {
+  const hrs = (Date.now() - new Date(iso).getTime()) / 3_600_000;
+  if (hrs < 1) return `${Math.round(hrs * 60)}m ago`;
+  if (hrs < 48) return `${hrs.toFixed(1)}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+/**
+ * Daily recap: every coin the bot showed you that day, re-priced live.
+ * x = price now vs price at the moment of FIRST sighting.
+ */
+export function formatReport(r: ReportData): string {
+  const MAX_ROWS = 25;
+  const shown = r.rows.slice(0, MAX_ROWS);
+
+  const lines = shown.map((row, i) => {
+    const e = row.entry;
+    const label =
+      row.x === null ? "💀 gone from dex" : `${fmtX(row.x)} ${xEmoji(row.x)}`;
+    const mcapMove = row.now
+      ? `${fmtMcap(e.mcap)} → ${fmtMcap(row.now.mcap)}`
+      : `${fmtMcap(e.mcap)} → ?`;
+    const times = row.sightings > 1 ? ` · seen ${row.sightings}x` : "";
+    return (
+      `${i + 1}. <b>${esc(e.symbol)}</b> — ${label} (${e.chainId})\n` +
+      `   first seen ${fmtClock(e.at)} (${fmtAgo(e.at)}) @ ${mcapMove}` +
+      `${times} · <a href="${e.url}">chart</a>`
+    );
+  });
+
+  const xs = r.rows
+    .map((row) => row.x)
+    .filter((x): x is number => x !== null)
+    .sort((a, b) => a - b);
+  const winners = xs.filter((x) => x >= 1.2).length;
+  const gone = r.rows.filter((row) => row.x === null).length;
+
+  const stats: string[] = [`hit rate: ${winners}/${r.rows.length} did ≥1.2x`];
+  const top = r.rows[0];
+  if (top && top.x !== null && top.x >= 1.2) {
+    stats.push(`best: ${esc(top.entry.symbol)} ${fmtX(top.x)}`);
+  }
+  if (xs.length) stats.push(`median: ${fmtX(xs[Math.floor(xs.length / 2)])}`);
+  if (gone) stats.push(`${gone} vanished`);
+
+  const out = [
+    `📊 <b>recap ${r.day}</b> — ${r.rows.length} coins across ` +
+      `${r.totalSightings} sightings`,
+    `<i>x = price now vs price when I first showed you it</i>`,
+    "",
+    ...lines,
+  ];
+  if (r.rows.length > MAX_ROWS) {
+    out.push(
+      "",
+      `…+${r.rows.length - MAX_ROWS} more in data/picks-${r.day}.jsonl`
+    );
+  }
+  out.push("", `<b>${stats.join(" · ")}</b>`);
+  return out.join("\n");
 }
 
 /**

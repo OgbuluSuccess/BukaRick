@@ -4,8 +4,9 @@ import { searchPairs, freshFeed, pairsForAddress } from "./dexscreener.js";
 import { chainFeed } from "./geckoterminal.js";
 import type { TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
-import { formatReply, formatTokenCard } from "./formatter.js";
+import { formatReply, formatTokenCard, formatReport } from "./formatter.js";
 import { holderConcentration } from "./holders.js";
+import { logPicks, buildReport, resolveDay } from "./tracker.js";
 
 // EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
 const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
@@ -21,9 +22,34 @@ bot.command("start", (ctx) =>
     '"microcaps under 250k, fresh, like 10"\n' +
     '"sol degens under 100k"\n' +
     '"coins like THROBBIN"\n' +
-    "or paste a contract address for the full card"
+    "or paste a contract address for the full card\n\n" +
+    "/report — how today's picks did since I showed you them\n" +
+    "/report yesterday · /report 2026-07-09 also work"
   )
 );
+
+bot.command("report", async (ctx) => {
+  const day = resolveDay(ctx.match ?? "");
+  if (!day) {
+    await ctx.reply("usage: /report, /report yesterday, or /report 2026-07-09");
+    return;
+  }
+  await ctx.replyWithChatAction("typing");
+  try {
+    const report = await buildReport(day);
+    if (!report || report.rows.length === 0) {
+      await ctx.reply(`nothing logged for ${day}. scan something first.`);
+      return;
+    }
+    await ctx.reply(formatReport(report), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("couldn't build the report, run it back in a sec");
+  }
+});
 
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text;
@@ -118,6 +144,9 @@ bot.on("message:text", async (ctx) => {
         header = `nothing matching "${intent.keyword}" fit the filter — pulling the fresh feed instead:`;
       }
     }
+
+    // log every shown coin so /report can score it later
+    logPicks(ranked, text).catch(console.error);
 
     await ctx.reply(formatReply(ranked, header), {
       parse_mode: "HTML",
