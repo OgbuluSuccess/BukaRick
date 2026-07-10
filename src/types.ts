@@ -3,6 +3,7 @@ export interface TokenPair {
   dexId?: string;           // "uniswap", "raydium"...
   pairAddress: string;
   baseToken: { address: string; name: string; symbol: string };
+  quoteToken?: { address: string; name: string; symbol: string };
   priceUsd: string;
   marketCap?: number;       // DexScreener calls it marketCap or fdv
   fdv?: number;
@@ -18,7 +19,8 @@ export interface TokenPair {
   pairCreatedAt?: number;   // unix ms
   url: string;              // dexscreener link
   info?: {
-    imageUrl?: string;
+    imageUrl?: string;        // token logo
+    header?: string;          // banner image (1500x500)
     websites?: { url: string }[];
     socials?: { type: string; url: string }[];
   };

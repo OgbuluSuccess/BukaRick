@@ -48,7 +48,23 @@ bot.on("message:text", async (ctx) => {
         best.chainId,
         best.baseToken.address
       );
-      await ctx.reply(formatTokenCard(best, holders, pairs.length), {
+      const card = formatTokenCard(best, holders, pairs.length);
+
+      // banner photo with the card as caption, like Rick; plain text
+      // fallback if the image is missing or Telegram rejects it
+      const banner = best.info?.header ?? best.info?.imageUrl;
+      if (banner) {
+        try {
+          await ctx.replyWithPhoto(banner, {
+            caption: card,
+            parse_mode: "HTML",
+          });
+          return;
+        } catch {
+          // fall through to text reply
+        }
+      }
+      await ctx.reply(card, {
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
       });

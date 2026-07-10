@@ -60,55 +60,57 @@ export function formatTokenCard(
 ): string {
   const mcap = p.marketCap ?? p.fdv ?? 0;
   const liq = p.liquidity?.usd ?? 0;
-  const vol24 = p.volume?.h24 ?? 0;
+  const vol = p.volume;
   const ageMin = p.pairCreatedAt
     ? (Date.now() - p.pairCreatedAt) / 60_000
     : null;
-  const chg1h = p.priceChange?.h1;
-  const chg24h = p.priceChange?.h24;
+  const chg = p.priceChange;
   const tx1 = p.txns?.h1;
+  const tx24 = p.txns?.h24;
+  const liqPct = mcap > 0 ? (liq / mcap) * 100 : 0;
 
   const lines = [
     `🪙 <b>${esc(p.baseToken.name)}</b> [${fmtMcap(mcap)}] ` +
       `<b>$${esc(p.baseToken.symbol)}</b>`,
-    `⛓ ${p.chainId}${p.dexId ? ` @ ${p.dexId}` : ""}`,
+    `⛓ ${p.chainId}${p.dexId ? ` @ ${p.dexId}` : ""}` +
+      (p.quoteToken ? ` · vs ${esc(p.quoteToken.symbol)}` : ""),
     `💵 USD: $${p.priceUsd}`,
-    `💎 FDV: ${fmtMcap(p.fdv ?? mcap)}`,
-    `💦 Liq: ${fmtMcap(liq)}${pairCount > 1 ? ` [x${pairCount}]` : ""}`,
-    `📊 Vol 24h: ${fmtMcap(vol24)}${ageMin !== null ? ` · Age: ${fmtAge(ageMin).replace(" old", "")}` : ""}`,
+    `💎 FDV: ${fmtMcap(p.fdv ?? mcap)} · 💦 Liq: ${fmtMcap(liq)}` +
+      (mcap > 0 ? ` (${liqPct.toFixed(0)}% of mcap)` : "") +
+      (pairCount > 1 ? ` [x${pairCount}]` : ""),
   ];
 
-  if (chg1h !== undefined || tx1) {
-    const parts: string[] = [];
-    if (chg1h !== undefined) parts.push(`1H: ${fmtPct(chg1h)}`);
-    if (chg24h !== undefined) parts.push(`24H: ${fmtPct(chg24h)}`);
-    if (tx1) parts.push(`🅑 ${tx1.buys} / 🅢 ${tx1.sells}`);
-    lines.push(`📈 ${parts.join(" · ")}`);
-  }
-
-  if (mcap > 0) lines.push(`🔥 vol/mcap: ${(vol24 / mcap).toFixed(2)}`);
-
-  if (holders) {
-    const pct = holders.top10Pct.toFixed(0);
+  if (vol) {
     lines.push(
-      holders.top10Pct > 40
-        ? `👥 top10 hold ${pct}% — trap risk`
-        : `👥 top10 hold ${pct}%${holders.top10Pct < 20 ? " — clean distribution" : ""}`
+      `📊 Vol: 1h ${fmtMcap(vol.h1)} · 6h ${fmtMcap(vol.h6)} · 24h ${fmtMcap(vol.h24)}`
     );
   }
+  if (chg) {
+    lines.push(
+      `📈 Chg: 5m ${fmtPct(chg.m5)} · 1h ${fmtPct(chg.h1)} · ` +
+        `6h ${fmtPct(chg.h6)} · 24h ${fmtPct(chg.h24)}`
+    );
+  }
+  if (tx1 || tx24) {
+    const parts: string[] = [];
+    if (tx1) parts.push(`1h 🅑 ${tx1.buys} / 🅢 ${tx1.sells}`);
+    if (tx24) parts.push(`24h 🅑 ${tx24.buys} / 🅢 ${tx24.sells}`);
+    lines.push(`🔄 Txns: ${parts.join(" · ")}`);
+  }
 
-  // verdict line, in voice
-  const flags: string[] = [];
-  if (liq < 5_000) flags.push("liq is dust");
-  if (mcap > 0 && liq / mcap < 0.02) flags.push("paper-thin liq vs mcap");
-  if (holders && holders.top10Pct > 40) flags.push("insiders loaded");
-  if ((chg24h ?? 0) >= 300) flags.push("already ran — chase risk");
+  const meta: string[] = [];
+  if (ageMin !== null) meta.push(`⏳ Age: ${fmtAge(ageMin).replace(" old", "")}`);
+  if (mcap > 0) meta.push(`🔥 vol/mcap: ${((vol?.h24 ?? 0) / mcap).toFixed(2)}`);
+  if (meta.length) lines.push(meta.join(" · "));
+
+  if (holders) {
+    lines.push(`👥 top10 hold ${holders.top10Pct.toFixed(0)}% of supply`);
+  }
+
+  lines.push(`📋 CA: <code>${esc(p.baseToken.address)}</code>`);
+
   lines.push("");
-  lines.push(
-    flags.length
-      ? `⚠️ <i>${flags.join(", ")}. tread carefully.</i>`
-      : `🧪 <i>nothing screaming rug on the surface. still, size accordingly.</i>`
-  );
+  lines.push(verdict(p, holders, mcap, liq));
 
   const links = [`<a href="${p.url}">DEX chart</a>`];
   for (const w of p.info?.websites ?? []) {
@@ -120,4 +122,55 @@ export function formatTokenCard(
   lines.push(links.join(" · "));
 
   return lines.join("\n");
+}
+
+/**
+ * Rule-based verdict. Every line the bot says maps to one explicit
+ * threshold below — no vibes, no model, just the pair data:
+ *
+ *   red flags
+ *   - liq < $5k                 → exit door is dust
+ *   - liq/mcap < 2%             → mcap is a fiction, can't be realized
+ *   - top10 > 40% (Solana only) → insiders can nuke it at will
+ *   - 24h change ≥ +300%        → you're the exit liquidity
+ *   - 1h sells outnumber buys (≥20 txns, ratio < 0.7) → distribution
+ *
+ *   green flags
+ *   - 1h buys ≥ 2x sells (≥20 txns) → organic bid
+ *   - liq/mcap > 15%                → healthy depth
+ *   - top10 < 20%                   → clean distribution
+ *
+ * NOT checked (DexScreener doesn't know): mint/freeze authority,
+ * LP lock or burn, honeypot contracts, dev wallet history, bundled
+ * snipes. A clean card here can still rug.
+ */
+function verdict(
+  p: TokenPair,
+  holders: { top10Pct: number } | null,
+  mcap: number,
+  liq: number
+): string {
+  const red: string[] = [];
+  const green: string[] = [];
+  const tx1 = p.txns?.h1;
+  const chg24 = p.priceChange?.h24 ?? 0;
+
+  if (liq < 5_000) red.push("liq is dust — you can't exit");
+  if (mcap > 0 && liq / mcap < 0.02) red.push("paper-thin liq vs mcap");
+  if (holders && holders.top10Pct > 40)
+    red.push(`insiders hold ${holders.top10Pct.toFixed(0)}%`);
+  if (chg24 >= 300) red.push(`already ran ${fmtPct(chg24)} — chase risk`);
+  if (tx1 && tx1.buys + tx1.sells >= 20 && tx1.buys / Math.max(tx1.sells, 1) < 0.7)
+    red.push("sellers in control rn");
+
+  if (tx1 && tx1.buys + tx1.sells >= 20 && tx1.buys / Math.max(tx1.sells, 1) >= 2)
+    green.push("real buy pressure");
+  if (mcap > 0 && liq / mcap > 0.15) green.push("healthy liq depth");
+  if (holders && holders.top10Pct < 20) green.push("clean distribution");
+
+  if (red.length)
+    return `⚠️ <i>${red.join(" · ")}. tread carefully.</i>`;
+  if (green.length)
+    return `🧪 <i>${green.join(" · ")} — but I can't see LP locks or mint authority. size accordingly.</i>`;
+  return `🧪 <i>nothing screaming on the surface, nothing exciting either. neutral.</i>`;
 }
