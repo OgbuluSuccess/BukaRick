@@ -32,11 +32,21 @@ bot.on("message:text", async (ctx) => {
       ? await searchPairs(intent.keyword)
       : await freshFeed();
 
-    const ranked = await filterAndRank(pairs, intent);
+    let ranked = await filterAndRank(pairs, intent);
 
-    const header = intent.keyword
+    let header = intent.keyword
       ? `pulled matches for "${intent.keyword}":`
       : undefined;
+
+    // "microcaps like X" usually cites a coin that already outgrew the
+    // mcap band, so a literal search for X filters to nothing — fall
+    // back to the broad feed with the same filters instead
+    if (ranked.length === 0 && intent.keyword) {
+      ranked = await filterAndRank(await freshFeed(), intent);
+      if (ranked.length > 0) {
+        header = `nothing matching "${intent.keyword}" fit the filter — pulling the fresh feed instead:`;
+      }
+    }
 
     await ctx.reply(formatReply(ranked, header), {
       parse_mode: "HTML",

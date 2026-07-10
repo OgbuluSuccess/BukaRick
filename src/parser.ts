@@ -28,6 +28,7 @@ export function parseIntent(text: string): QueryIntent {
     sol: "solana", solana: "solana",
     base: "base", eth: "ethereum", ethereum: "ethereum",
     bsc: "bsc", bnb: "bsc",
+    robinhood: "robinhood", hood: "robinhood",
   };
   for (const [word, chainId] of Object.entries(chains)) {
     if (new RegExp(`\\b${word}\\b`).test(t)) {
