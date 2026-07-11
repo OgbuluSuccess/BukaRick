@@ -1,9 +1,30 @@
-import type { RankedToken, TokenPair } from "./types.js";
+import type { QueryIntent, RankedToken, TokenPair } from "./types.js";
 import type { ReportData } from "./tracker.js";
 
 function fmtMcap(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
   return `$${Math.round(n / 1000)}K`;
+}
+
+function fmtHours(h: number): string {
+  return h % 24 === 0 ? `${h / 24}d` : `${h}h`;
+}
+
+/**
+ * One line echoing exactly which filters were parsed from the message —
+ * so a dropped or misread filter is visible, never silent.
+ */
+export function describeIntent(i: QueryIntent): string {
+  const parts: string[] = [i.chain ?? "all chains"];
+  if (i.maxMcap !== undefined) parts.push(`mcap ≤ ${fmtMcap(i.maxMcap)}`);
+  if (i.minMcap !== undefined) parts.push(`mcap ≥ ${fmtMcap(i.minMcap)}`);
+  if (i.minAgeHours !== undefined)
+    parts.push(`age ≥ ${fmtHours(i.minAgeHours)}`);
+  if (i.maxAgeHours !== undefined)
+    parts.push(`age ≤ ${fmtHours(i.maxAgeHours)}`);
+  if (i.keyword) parts.push(`theme "${esc(i.keyword)}"`);
+  parts.push(`top ${i.count}`);
+  return parts.join(" · ");
 }
 
 function fmtAge(minutes: number): string {

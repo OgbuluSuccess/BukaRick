@@ -47,7 +47,8 @@ export interface QueryIntent {
   minMcap?: number;
   count: number;            // how many to return, default 10
   keyword?: string;         // "robinhood", "dog", whatever theme
-  maxAgeHours?: number;     // freshness filter
+  maxAgeHours?: number;     // freshness filter ("under 2 days old")
+  minAgeHours?: number;     // maturity filter ("not less than 1 day old")
 }
 
 export interface RankedToken {

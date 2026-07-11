@@ -25,14 +25,22 @@ export async function filterAndRank(
     const ageMinutes = ageMs / 60_000;
     const ageHours = ageMinutes / 60;
 
+    // quality floors — but an EXPLICIT ask below the rug-casino line
+    // ("less than 12k mcap") wins over the default: obey the user,
+    // keep only a token floor against outright dead pools
+    const explicitLow = intent.maxMcap !== undefined && intent.maxMcap < 40_000;
+    const mcapFloor = explicitLow ? 1_000 : 40_000;
+    const liqFloor = explicitLow ? 1_000 : 5_000;
+
     // ---- hard filters ----
     if (intent.chain && p.chainId !== intent.chain) continue;
     if (intent.maxMcap && mcap > intent.maxMcap) continue;
     if (intent.minMcap && mcap < intent.minMcap) continue;
     if (intent.maxAgeHours && ageHours > intent.maxAgeHours) continue;
+    if (intent.minAgeHours && ageHours < intent.minAgeHours) continue;
     if (mcap === 0) continue;
-    if (mcap < 40_000) continue;          // below this = rug casino
-    if (liq < 5_000) continue;            // rug floor
+    if (mcap < mcapFloor) continue;       // below this = rug casino
+    if (liq < liqFloor) continue;         // rug floor
     if (liq / mcap < 0.02) continue;      // paper-thin liquidity
 
     const volToMcap = vol24 / mcap;

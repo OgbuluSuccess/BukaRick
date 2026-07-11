@@ -1,5 +1,6 @@
 import { Bot } from "grammy";
 import { parseIntent } from "./parser.js";
+import { parseIntentLLM } from "./intent-llm.js";
 import {
   searchPairs,
   freshFeed,
@@ -9,7 +10,12 @@ import {
 import { chainFeed } from "./geckoterminal.js";
 import type { RankedToken, TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
-import { formatReply, formatTokenCard, formatReport } from "./formatter.js";
+import {
+  formatReply,
+  formatTokenCard,
+  formatReport,
+  describeIntent,
+} from "./formatter.js";
 import { holderConcentration } from "./holders.js";
 import { checkSafety } from "./safety.js";
 import {
@@ -246,7 +252,10 @@ bot.on("message:text", async (ctx) => {
       return;
     }
 
-    const intent = parseIntent(text);
+    // Claude parse first (understands any phrasing; needs
+    // ANTHROPIC_API_KEY) → regex parser as the always-on fallback
+    const intent = (await parseIntentLLM(text)) ?? parseIntent(text);
+    const understood = `🔎 filters I read: ${describeIntent(intent)}`;
 
     const broadFeed = () => gatherFeed(intent.chain ? [intent.chain] : []);
 
@@ -289,12 +298,25 @@ bot.on("message:text", async (ctx) => {
       }
     }
 
+    // still empty → say exactly which filters were applied, so a
+    // misread is visible instead of a silent shrug
+    if (ranked.length === 0) {
+      await ctx.reply(
+        `nothing passes that filter rn.\n${understood}\n` +
+          "loosen one of them or rephrase and I'll rerun it."
+      );
+      return;
+    }
+
     bench(ctx.chat.id, ranked);
 
     // log every shown coin so /report can score it later
     logPicks(ranked, text).catch(console.error);
 
-    await ctx.reply(formatReply(ranked, header), {
+    const fullHeader =
+      (header ?? "fresh pulls, newest first, filtered by my signals:") +
+      `\n${understood}`;
+    await ctx.reply(formatReply(ranked, fullHeader), {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     });
