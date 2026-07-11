@@ -76,6 +76,17 @@ export async function filterAndRank(
       notes.push("already ran — chase risk");
     }
 
+    // social signals: trending is organic (people actually trading it),
+    // boosts are paid ads — small bump only, it proves marketing spend
+    // not quality
+    if (p.trending) {
+      score += 10;
+      notes.push("trending on gecko");
+    }
+    if ((p.boosts ?? 0) >= 10) {
+      score += 5;
+    }
+
     ranked.push({ pair: p, score, ageMinutes, volToMcap, notes });
   }
 

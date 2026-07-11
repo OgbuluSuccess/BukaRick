@@ -1,12 +1,22 @@
 import { Bot } from "grammy";
 import { parseIntent } from "./parser.js";
-import { searchPairs, freshFeed, pairsForAddress } from "./dexscreener.js";
+import {
+  searchPairs,
+  freshFeed,
+  pairsForAddress,
+  boostMap,
+} from "./dexscreener.js";
 import { chainFeed } from "./geckoterminal.js";
 import type { RankedToken, TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
 import { formatReply, formatTokenCard, formatReport } from "./formatter.js";
 import { holderConcentration } from "./holders.js";
-import { logPicks, buildReport, resolveDay } from "./tracker.js";
+import {
+  logPicks,
+  buildReport,
+  resolveDay,
+  startPeakWatcher,
+} from "./tracker.js";
 
 // EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
 const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
@@ -85,7 +95,10 @@ bot.on("message:text", async (ctx) => {
     // pasted contract address → single-token card (the "Rick" move)
     const addrMatch = text.match(ADDRESS_RE);
     if (addrMatch) {
-      const pairs = await pairsForAddress(addrMatch[1]);
+      const [pairs, boosts] = await Promise.all([
+        pairsForAddress(addrMatch[1]),
+        boostMap().catch(() => new Map<string, number>()),
+      ]);
       if (pairs.length === 0) {
         await ctx.reply(
           "can't find that CA on dexscreener. too new, wrong chain, or already dead."
@@ -96,6 +109,8 @@ bot.on("message:text", async (ctx) => {
       const best = [...pairs].sort(
         (a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0)
       )[0];
+      const boostTotal = boosts.get(coinKey(best));
+      if (boostTotal) best.boosts = boostTotal;
       const holders = await holderConcentration(
         best.chainId,
         best.baseToken.address
@@ -133,19 +148,22 @@ bot.on("message:text", async (ctx) => {
         freshFeed(),
         intent.chain ? chainFeed(intent.chain) : Promise.resolve([]),
       ]);
-      const merged: TokenPair[] = [];
-      const seen = new Set<string>();
+      // lowercase keys: DexScreener checksums EVM addresses, Gecko doesn't.
+      // same coin from both sources → merge its signals, keep one entry
+      const byKey = new Map<string, TokenPair>();
       for (const s of sources) {
         if (s.status !== "fulfilled") continue;
         for (const p of s.value) {
-          // lowercase: DexScreener checksums EVM addresses, Gecko doesn't
-          const key = `${p.chainId}:${p.baseToken.address.toLowerCase()}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          merged.push(p);
+          const prev = byKey.get(coinKey(p));
+          if (prev) {
+            if (p.boosts && !prev.boosts) prev.boosts = p.boosts;
+            if (p.trending) prev.trending = true;
+          } else {
+            byKey.set(coinKey(p), p);
+          }
         }
       }
-      return merged;
+      return [...byKey.values()];
     };
 
     const exclude = benched(ctx.chat.id);
@@ -202,5 +220,6 @@ bot.on("message:text", async (ctx) => {
   }
 });
 
+startPeakWatcher(); // sample logged picks every 5m so /report knows the highs
 bot.start();
 console.log("bot running");

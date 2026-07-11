@@ -59,19 +59,42 @@ export async function pairsForTokens(
   return pairs;
 }
 
+type BoostRef = TokenRef & { totalAmount?: number };
+
+/**
+ * ⚡ boost totals by "chain:address" (lowercased). Boosts are PAID
+ * upvotes on DexScreener — a visibility/marketing-spend signal, not
+ * a community vote. Treat accordingly.
+ */
+export async function boostMap(): Promise<Map<string, number>> {
+  const results = await Promise.allSettled([
+    get<BoostRef[]>(`/token-boosts/latest/v1`),
+    get<BoostRef[]>(`/token-boosts/top/v1`),
+  ]);
+  const map = new Map<string, number>();
+  for (const r of results) {
+    if (r.status !== "fulfilled") continue;
+    for (const b of r.value) {
+      const key = `${b.chainId}:${b.tokenAddress.toLowerCase()}`;
+      map.set(key, Math.max(map.get(key) ?? 0, b.totalAmount ?? 0));
+    }
+  }
+  return map;
+}
+
 /**
  * "All chain play": merge the free discovery feeds (latest profiles +
  * boosted tokens), hydrate, dedupe. Crude but effective for an MVP feed.
  */
 export async function freshFeed(): Promise<TokenPair[]> {
-  const sources = await Promise.allSettled([
-    latestTokenProfiles(),
-    get<TokenRef[]>(`/token-boosts/latest/v1`),
-    get<TokenRef[]>(`/token-boosts/top/v1`),
+  const [profiles, boosts] = await Promise.all([
+    latestTokenProfiles().catch(() => [] as TokenRef[]),
+    boostMap(),
   ]);
-  const refs: TokenRef[] = [];
-  for (const s of sources) {
-    if (s.status === "fulfilled") refs.push(...s.value);
+  const refs: TokenRef[] = [...profiles];
+  for (const key of boosts.keys()) {
+    const [chainId, tokenAddress] = key.split(":");
+    refs.push({ chainId, tokenAddress });
   }
 
   // group unique addresses by chain, hydrate in parallel
@@ -93,12 +116,14 @@ export async function freshFeed(): Promise<TokenPair[]> {
     if (r.status === "fulfilled") pairs.push(...r.value);
   }
 
-  // dedupe by base token address
+  // dedupe by base token address, attach boost totals
   const seen = new Set<string>();
   return pairs.filter((p) => {
     const key = `${p.chainId}:${p.baseToken.address.toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
+    const b = boosts.get(key);
+    if (b) p.boosts = b;
     return true;
   });
 }

@@ -18,6 +18,8 @@ export interface TokenPair {
   };
   pairCreatedAt?: number;   // unix ms
   url: string;              // dexscreener link
+  boosts?: number;          // dexscreener ⚡ total — PAID upvotes
+  trending?: boolean;       // on geckoterminal's trending list (organic)
   info?: {
     imageUrl?: string;        // token logo
     header?: string;          // banner image (1500x500)

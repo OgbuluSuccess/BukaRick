@@ -93,20 +93,32 @@ export async function chainFeed(chainId: string): Promise<TokenPair[]> {
   const network = NETWORK[chainId];
   if (!network) return [];
 
-  const results = await Promise.allSettled([
-    pools(network, "new_pools?page=1"),
-    pools(network, "new_pools?page=2"),
-    pools(network, "trending_pools"),
-    pools(network, "pools"), // top by volume
-  ]);
+  const sources: { path: string; trending?: boolean }[] = [
+    { path: "new_pools?page=1" },
+    { path: "new_pools?page=2" },
+    { path: "trending_pools", trending: true },
+    { path: "pools" }, // top by volume
+  ];
+  const results = await Promise.allSettled(
+    sources.map((s) => pools(network, s.path))
+  );
 
-  const out: TokenPair[] = [];
-  for (const r of results) {
-    if (r.status !== "fulfilled") continue;
+  // dedupe by base token; trending status survives the merge
+  const byKey = new Map<string, TokenPair>();
+  results.forEach((r, i) => {
+    if (r.status !== "fulfilled") return;
     for (const pool of r.value) {
       const pair = toPair(chainId, network, pool);
-      if (pair) out.push(pair);
+      if (!pair) continue;
+      if (sources[i].trending) pair.trending = true;
+      const key = pair.baseToken.address.toLowerCase();
+      const prev = byKey.get(key);
+      if (prev) {
+        if (pair.trending) prev.trending = true;
+      } else {
+        byKey.set(key, pair);
+      }
     }
-  }
-  return out;
+  });
+  return [...byKey.values()];
 }

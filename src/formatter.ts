@@ -25,12 +25,20 @@ export function formatReply(tokens: RankedToken[], header?: string): string {
   const lines = tokens.map((t, i) => {
     const mcap = t.pair.marketCap ?? t.pair.fdv ?? 0;
     const tag = t.notes.length ? ` — ${t.notes[0]}` : "";
+    const social = [
+      t.pair.trending ? "📈 trending" : "",
+      t.pair.boosts ? `⚡${t.pair.boosts}` : "",
+    ]
+      .filter(Boolean)
+      .map((s) => `${s} · `)
+      .join("");
+    const links = [`<a href="${t.pair.url}">chart</a>`, ...socialLinks(t.pair)];
     return (
       `${i + 1}. <b>${esc(t.pair.baseToken.symbol)}</b> ` +
       `(${fmtMcap(mcap)}) — ${fmtAge(t.ageMinutes)}, ` +
       `${t.pair.chainId}${tag}\n` +
       `   vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
-      `<a href="${t.pair.url}">chart</a>`
+      `${social}${links.join(" · ")}`
     );
   });
 
@@ -47,8 +55,24 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function fmtPct(n: number): string {
+function fmtPct(n: number | undefined): string {
+  // DexScreener omits timeframes with no trades — show "?" not NaN
+  if (n === undefined) return "?";
   return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+/** website/twitter/telegram links, when the pair data carries them */
+function socialLinks(p: TokenPair): string[] {
+  const links: string[] = [];
+  for (const w of p.info?.websites ?? []) {
+    links.push(`<a href="${w.url}">web</a>`);
+  }
+  for (const s of p.info?.socials ?? []) {
+    const label =
+      s.type === "twitter" ? "𝕏" : s.type === "telegram" ? "tg" : esc(s.type);
+    links.push(`<a href="${s.url}">${label}</a>`);
+  }
+  return links;
 }
 
 /**
@@ -60,10 +84,10 @@ function fmtPct(n: number): string {
  *                        or a wash-traded trap. check buys vs sells.
  */
 export function volSignal(ratio: number): string {
-  if (ratio >= 3) return "🌋 blazing";
-  if (ratio >= 1) return "🔥 hot";
-  if (ratio >= 0.5) return "🌤 warm";
-  return "❄️ quiet";
+  if (ratio >= 3) return "🌋 blazing (volume dwarfs mcap — the play or a wash trap)";
+  if (ratio >= 1) return "🔥 hot (trades its whole mcap daily — real interest)";
+  if (ratio >= 0.5) return "🌤 warm (some eyes on it — watchlist tier)";
+  return "❄️ quiet (barely traded — dead or dying)";
 }
 
 function fmtX(x: number): string {
@@ -101,8 +125,19 @@ export function formatReport(r: ReportData): string {
 
   const lines = shown.map((row, i) => {
     const e = row.entry;
-    const label =
-      row.x === null ? "💀 gone from dex" : `${fmtX(row.x)} ${xEmoji(row.x)}`;
+    let label: string;
+    if (row.x === null && row.peakX === null) {
+      label = "💀 gone from dex";
+    } else {
+      const parts: string[] = [];
+      if (row.peakX !== null && row.peak) {
+        parts.push(
+          `high ${fmtX(row.peakX)} ${xEmoji(row.peakX)} at ${fmtClock(row.peak.at)}`
+        );
+      }
+      parts.push(row.x === null ? "now 💀 gone" : `now ${fmtX(row.x)}`);
+      label = parts.join(" · ");
+    }
     const mcapMove = row.now
       ? `${fmtMcap(e.mcap)} → ${fmtMcap(row.now.mcap)}`
       : `${fmtMcap(e.mcap)} → ?`;
@@ -114,17 +149,24 @@ export function formatReport(r: ReportData): string {
     );
   });
 
+  // judge picks by the high they hit; picks logged before peak
+  // tracking existed fall back to their current x
   const xs = r.rows
-    .map((row) => row.x)
+    .map((row) => row.peakX ?? row.x)
     .filter((x): x is number => x !== null)
     .sort((a, b) => a - b);
   const winners = xs.filter((x) => x >= 1.2).length;
-  const gone = r.rows.filter((row) => row.x === null).length;
+  const gone = r.rows.filter(
+    (row) => row.x === null && row.peakX === null
+  ).length;
 
-  const stats: string[] = [`hit rate: ${winners}/${r.rows.length} did ≥1.2x`];
+  const stats: string[] = [
+    `hit rate: ${winners}/${r.rows.length} hit ≥1.2x`,
+  ];
   const top = r.rows[0];
-  if (top && top.x !== null && top.x >= 1.2) {
-    stats.push(`best: ${esc(top.entry.symbol)} ${fmtX(top.x)}`);
+  const topX = top ? top.peakX ?? top.x : null;
+  if (top && topX !== null && topX >= 1.2) {
+    stats.push(`best: ${esc(top.entry.symbol)} ${fmtX(topX)}`);
   }
   if (xs.length) stats.push(`median: ${fmtX(xs[Math.floor(xs.length / 2)])}`);
   if (gone) stats.push(`${gone} vanished`);
@@ -132,7 +174,8 @@ export function formatReport(r: ReportData): string {
   const out = [
     `📊 <b>recap ${r.day}</b> — ${r.rows.length} coins across ` +
       `${r.totalSightings} sightings`,
-    `<i>x = price now vs price when I first showed you it</i>`,
+    `<i>x = vs price when I first showed you it · ` +
+      `high = the top it hit after (sampled every 5m)</i>`,
     "",
     ...lines,
   ];
@@ -207,18 +250,17 @@ export function formatTokenCard(
     lines.push(`👥 top10 hold ${holders.top10Pct.toFixed(0)}% of supply`);
   }
 
+  const social: string[] = [];
+  if (p.trending) social.push("📈 trending on geckoterminal");
+  if (p.boosts) social.push(`⚡ ${p.boosts} boosts (paid promo)`);
+  if (social.length) lines.push(social.join(" · "));
+
   lines.push(`📋 CA: <code>${esc(p.baseToken.address)}</code>`);
 
   lines.push("");
   lines.push(verdict(p, holders, mcap, liq));
 
-  const links = [`<a href="${p.url}">DEX chart</a>`];
-  for (const w of p.info?.websites ?? []) {
-    links.push(`<a href="${w.url}">web</a>`);
-  }
-  for (const s of p.info?.socials ?? []) {
-    links.push(`<a href="${s.url}">${esc(s.type)}</a>`);
-  }
+  const links = [`<a href="${p.url}">DEX chart</a>`, ...socialLinks(p)];
   lines.push(links.join(" · "));
 
   return lines.join("\n");
