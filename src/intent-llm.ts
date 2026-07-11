@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import type Anthropic from "@anthropic-ai/sdk";
 import type { QueryIntent } from "./types.js";
 
 /**
@@ -119,7 +119,22 @@ async function parseWithDeepSeek(text: string): Promise<QueryIntent | null> {
 
 // ---- Claude (structured outputs — reply is schema-guaranteed) ----
 
-const claude = ANTHROPIC_KEY ? new Anthropic() : null;
+// lazy import: the SDK is only loaded when the claude provider is
+// actually used, so a deployment without `npm install` (or without an
+// Anthropic key) can never crash the bot at startup
+let claudeClient: Anthropic | null | undefined;
+
+async function getClaude(): Promise<Anthropic | null> {
+  if (claudeClient !== undefined) return claudeClient;
+  try {
+    const { default: AnthropicSdk } = await import("@anthropic-ai/sdk");
+    claudeClient = ANTHROPIC_KEY ? new AnthropicSdk() : null;
+  } catch {
+    console.error("@anthropic-ai/sdk not installed — run npm install");
+    claudeClient = null;
+  }
+  return claudeClient;
+}
 
 const SCHEMA = {
   type: "object",
@@ -153,6 +168,7 @@ const SCHEMA = {
 } as const;
 
 async function parseWithClaude(text: string): Promise<QueryIntent | null> {
+  const claude = await getClaude();
   if (!claude) return null;
   const response = await claude.messages.create(
     {
