@@ -1,15 +1,16 @@
 import { Bot } from "grammy";
 import { parseIntent, resolveChain } from "./parser.js";
 import { parseIntentLLM } from "./intent-llm.js";
-import { narrativePicks } from "./narrative.js";
+import { narrativePicks, judgeMemes } from "./narrative.js";
 import {
   searchPairs,
   freshFeed,
   pairsForAddress,
   boostMap,
   descFor,
+  latestTokenProfiles,
 } from "./dexscreener.js";
-import { chainFeed } from "./geckoterminal.js";
+import { chainFeed, tokenInfo } from "./geckoterminal.js";
 import type { RankedToken, TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
 import {
@@ -249,6 +250,8 @@ bot.on("message:text", async (ctx) => {
       const [pairs, boosts] = await Promise.all([
         pairsForAddress(addrMatch[1]),
         boostMap().catch(() => new Map<string, number>()),
+        // warms the description cache for recently profiled tokens
+        latestTokenProfiles().catch(() => []),
       ]);
       if (pairs.length === 0) {
         await ctx.reply(
@@ -262,19 +265,30 @@ bot.on("message:text", async (ctx) => {
       )[0];
       const boostTotal = boosts.get(coinKey(best));
       if (boostTotal) best.boosts = boostTotal;
+
+      // description: dexscreener profile cache first, geckoterminal
+      // token info as fallback (also carries the GT quality score) —
+      // resolved BEFORE the meme judge so it can read the story
       best.description ??= descFor(best.chainId, best.baseToken.address);
-      const [holders, safety] = await Promise.all([
+      const gt = await tokenInfo(best.chainId, best.baseToken.address);
+      best.description ??= gt?.description;
+
+      const [holders, safety, verdicts] = await Promise.all([
         holderConcentration(
           best.chainId,
           best.baseToken.address,
           pairs.map((p) => p.pairAddress) // exclude every pool of this token
         ),
         checkSafety(best),
+        judgeMemes([best]),
       ]);
       best.safety = safety;
       best.top10Pct = holders?.top10Pct ?? safety.top10Pct;
       best.holdersCount = holders?.holdersCount ?? safety.holdersCount;
-      const card = formatTokenCard(best, holders, pairs.length);
+      const card = formatTokenCard(best, holders, pairs.length, {
+        meme: verdicts.get(coinKey(best)),
+        gtScore: gt?.gtScore,
+      });
 
       // banner photo with the card as caption, like Rick; plain text
       // fallback if the image is missing or Telegram rejects it

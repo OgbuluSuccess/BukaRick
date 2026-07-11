@@ -77,6 +77,40 @@ function toPair(
   };
 }
 
+export interface GtTokenInfo {
+  description?: string;
+  gtScore?: number; // GeckoTerminal's 0-100 token quality score
+}
+
+/** per-token info lookup — description + GT score, when GT has them */
+export async function tokenInfo(
+  chainId: string,
+  address: string
+): Promise<GtTokenInfo | null> {
+  const network = NETWORK[chainId];
+  if (!network) return null;
+  try {
+    const res = await fetch(
+      `${BASE}/networks/${network}/tokens/${address.toLowerCase()}/info`,
+      { headers: { accept: "application/json" } }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      data?: { attributes?: { description?: unknown; gt_score?: unknown } };
+    };
+    const a = data.data?.attributes ?? {};
+    return {
+      description:
+        typeof a.description === "string" && a.description.trim()
+          ? a.description.trim()
+          : undefined,
+      gtScore: typeof a.gt_score === "number" ? a.gt_score : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function pools(network: string, path: string): Promise<GtPool[]> {
   const res = await fetch(`${BASE}/networks/${network}/${path}`, {
     headers: { accept: "application/json" },

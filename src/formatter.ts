@@ -1,5 +1,6 @@
 import type { QueryIntent, RankedToken, TokenPair } from "./types.js";
 import type { ReportData } from "./tracker.js";
+import type { MemeVerdict } from "./narrative.js";
 
 function fmtMcap(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -271,7 +272,8 @@ export function formatNarrative(
 export function formatTokenCard(
   p: TokenPair,
   holders: { top10Pct: number } | null,
-  pairCount: number
+  pairCount: number,
+  extras?: { meme?: MemeVerdict; gtScore?: number }
 ): string {
   const mcap = p.marketCap ?? p.fdv ?? 0;
   const liq = p.liquidity?.usd ?? 0;
@@ -337,6 +339,15 @@ export function formatTokenCard(
     lines.push(
       `📝 <i>${esc(p.description.slice(0, 200))}${p.description.length > 200 ? "…" : ""}</i>`
     );
+  }
+
+  if (extras?.meme) {
+    lines.push(
+      `🎭 ${esc(extras.meme.take)} — uniqueness ${extras.meme.unique}/5`
+    );
+  }
+  if (extras?.gtScore !== undefined) {
+    lines.push(`🧬 GT score ${extras.gtScore.toFixed(0)}/100`);
   }
 
   if (p.safety) {

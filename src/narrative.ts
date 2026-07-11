@@ -88,7 +88,7 @@ Judge only the CONCEPT from name/symbol/description. No description = judge the 
 
 Respond with ONLY JSON: {"scores":[{"i":0,"unique":3,"take":"..."}]}`;
 
-interface MemeVerdict {
+export interface MemeVerdict {
   unique: number;
   take: string;
 }
@@ -98,7 +98,7 @@ interface MemeVerdict {
  * ANTHROPIC_API_KEY). Missing provider or any failure → empty map and
  * the signal-based ranking stands alone.
  */
-async function judgeMemes(
+export async function judgeMemes(
   pairs: TokenPair[]
 ): Promise<Map<string, MemeVerdict>> {
   const out = new Map<string, MemeVerdict>();
