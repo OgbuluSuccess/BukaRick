@@ -35,14 +35,44 @@ const cache = new Map<string, { at: number; result: SafetyResult }>();
 const keyOf = (p: TokenPair) =>
   `${p.chainId}:${p.baseToken.address.toLowerCase()}`;
 
-/** buys-vs-sells fingerprint — the only signal on unscanned chains */
-function behavioral(p: TokenPair): SafetyResult {
+/**
+ * Behavioral fingerprint — the only signal on unscanned chains.
+ * Exported so strategy filters share one definition of "trap".
+ *
+ * Physics before psychology: a "sell" in the txn feed is only a real
+ * exit if the pool can pay it out. Wash-traded honeypots print
+ * thousands of fake sells between the dev's own tax-exempt wallets
+ * while the pool holds nothing — so liquidity and volume-vs-pool are
+ * checked BEFORE sell counts are believed.
+ */
+export function behavioral(p: TokenPair): SafetyResult {
   const tx = p.txns?.h24 ?? p.txns?.h1;
   const buys = tx?.buys ?? 0;
   const sells = tx?.sells ?? 0;
+  const tx1 = p.txns?.h1;
+  const liq = p.liquidity?.usd ?? 0;
+  const mcap = p.marketCap ?? p.fdv ?? 0;
+  const vol24 = p.volume?.h24 ?? 0;
   const ageMin = p.pairCreatedAt
     ? (Date.now() - p.pairCreatedAt) / 60_000
     : null;
+
+  const trapSigns: string[] = [];
+  if (mcap >= 10_000 && liq < 2_500) {
+    trapSigns.push("liquidity is dust — those \"sells\" can't be real exits");
+  }
+  // >50 full pool turns in a day on real size = printed volume
+  if (vol24 > 100_000 && vol24 > liq * 50) {
+    trapSigns.push("24h volume dwarfs the pool — wash-trade pattern");
+  }
+  if (trapSigns.length > 0) {
+    // corroborating detail, not an accusation on its own (feeds
+    // without per-hour data report 0/0 legitimately)
+    if (buys + sells >= 200 && tx1 && tx1.buys + tx1.sells === 0) {
+      trapSigns.push("busy all day yet silent the last hour — bots left");
+    }
+    return { status: "honeypot", reasons: trapSigns };
+  }
 
   // only accuse old-enough coins with heavy one-way flow — a fresh
   // runner legitimately has few sells and must not be buried
@@ -52,10 +82,10 @@ function behavioral(p: TokenPair): SafetyResult {
       reasons: [`${buys} buys but only ${sells} sells — exits may be blocked`],
     };
   }
-  if (sells >= 10) {
+  if (sells >= 10 && liq >= 2_500) {
     return {
       status: "sellable",
-      reasons: ["sells are flowing — exits demonstrably work"],
+      reasons: ["sells flowing through a real pool — exits work"],
     };
   }
   return {

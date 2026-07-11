@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { QueryIntent, TokenPair } from "./types.js";
+import { behavioral } from "./safety.js";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 
@@ -38,15 +39,12 @@ export const STRATEGIES: Strategy[] = [
 ];
 
 /**
- * Honeypot smell test from pair data alone: plenty of buys but
- * (almost) nobody has managed to sell — the classic can't-exit trap.
- * Not proof (that needs a contract simulator like honeypot.is), but
- * it catches the obvious ones.
+ * Honeypot smell test from pair data alone — delegates to the safety
+ * module's behavioral read so "trap" means the same thing everywhere:
+ * one-way flow, dust liquidity, or wash-traded volume.
  */
 export function honeypotSmell(p: TokenPair): boolean {
-  const t = p.txns?.h24;
-  if (!t) return false;
-  return t.buys >= 15 && t.sells <= Math.max(1, Math.floor(t.buys * 0.03));
+  return behavioral(p).status === "honeypot";
 }
 
 // ---- permanent per-strategy memory: never show the same coin twice ----
