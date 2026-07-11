@@ -13,6 +13,7 @@ const NETWORK: Record<string, string> = {
   base: "base",
   bsc: "bsc",
   robinhood: "robinhood",
+  tron: "tron",
 };
 
 interface GtPool {

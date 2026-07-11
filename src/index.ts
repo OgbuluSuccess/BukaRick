@@ -17,6 +17,12 @@ import {
   resolveDay,
   startPeakWatcher,
 } from "./tracker.js";
+import {
+  STRATEGIES,
+  honeypotSmell,
+  loadSeen,
+  saveSeen,
+} from "./strategies.js";
 
 // EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
 const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
@@ -45,22 +51,116 @@ function bench(chatId: number, tokens: RankedToken[]): void {
   recentlyShown.set(chatId, m);
 }
 
+// broad feed = DexScreener promoted feeds + GeckoTerminal's
+// new/trending/top pools for any named chains — the latter catches
+// launches minutes old that the boost feeds miss
+async function gatherFeed(chains: string[]): Promise<TokenPair[]> {
+  const sources = await Promise.allSettled([
+    freshFeed(),
+    ...chains.map((c) => chainFeed(c)),
+  ]);
+  // lowercase keys: DexScreener checksums EVM addresses, Gecko doesn't.
+  // same coin from several sources → merge its signals, keep one entry
+  const byKey = new Map<string, TokenPair>();
+  for (const s of sources) {
+    if (s.status !== "fulfilled") continue;
+    for (const p of s.value) {
+      const prev = byKey.get(coinKey(p));
+      if (prev) {
+        if (p.boosts && !prev.boosts) prev.boosts = p.boosts;
+        if (p.trending) prev.trending = true;
+      } else {
+        byKey.set(coinKey(p), p);
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
 const token = process.env.BOT_TOKEN;
 if (!token) throw new Error("Set BOT_TOKEN (get one from @BotFather)");
 
 const bot = new Bot(token);
 
-bot.command("start", (ctx) =>
+const HELP =
+  "talk to me:\n" +
+  '· "microcaps under 250k, fresh, like 10"\n' +
+  '· "sol degens under 100k" (chains: sol, eth, bsc, base, robinhood, trc)\n' +
+  '· "coins like THROBBIN"\n' +
+  "· paste a contract address → full token card\n" +
+  "\ncommands:\n" +
+  "/help — this list\n" +
+  "/strategies — your saved strategies and what each one hunts\n" +
+  STRATEGIES.map((s) => `/${s.id} — run "${s.name}" (never repeats a coin)\n`).join("") +
+  "/report — how today's picks did, with each coin's high\n" +
+  "/report yesterday · /report 2026-07-09 also work";
+
+bot.command(["start", "help"], (ctx) => ctx.reply(HELP));
+
+bot.command("strategies", (ctx) =>
   ctx.reply(
-    "send me something like:\n" +
-    '"microcaps under 250k, fresh, like 10"\n' +
-    '"sol degens under 100k"\n' +
-    '"coins like THROBBIN"\n' +
-    "or paste a contract address for the full card\n\n" +
-    "/report — how today's picks did since I showed you them\n" +
-    "/report yesterday · /report 2026-07-09 also work"
+    [
+      "🎯 strategies — run one and it replies only when coins satisfy " +
+        "its filter, and never shows you the same coin twice:",
+      "",
+      ...STRATEGIES.map((s) => `/${s.id} — <b>${s.name}</b>\n${s.description}`),
+      "",
+      "<i>want /s2? tell me the filter and it's a 10-line add.</i>",
+    ].join("\n"),
+    { parse_mode: "HTML" }
   )
 );
+
+// one command per saved strategy: /s1, /s2, ...
+for (const s of STRATEGIES) {
+  bot.command(s.id, async (ctx) => {
+    await ctx.replyWithChatAction("typing");
+    try {
+      const seen = await loadSeen(s.id);
+      let pairs = await gatherFeed(s.chains ?? []);
+      if (s.chains) pairs = pairs.filter((p) => s.chains!.includes(p.chainId));
+      if (s.minVolToMcap) {
+        pairs = pairs.filter((p) => {
+          const mcap = p.marketCap ?? p.fdv ?? 0;
+          return mcap > 0 && (p.volume?.h24 ?? 0) / mcap >= s.minVolToMcap!;
+        });
+      }
+      let hpDropped = 0;
+      if (s.noHoneypot) {
+        const before = pairs.length;
+        pairs = pairs.filter((p) => !honeypotSmell(p));
+        hpDropped = before - pairs.length;
+      }
+
+      const ranked = await filterAndRank(pairs, s.intent, seen);
+      if (ranked.length === 0) {
+        await ctx.reply(
+          `🎯 ${s.name}: conditions not satisfied rn — nothing NEW passes ` +
+            `the filter. run /${s.id} again later; coins I already showed ` +
+            `you stay retired forever.`
+        );
+        return;
+      }
+
+      // retire these permanently for this strategy
+      for (const t of ranked) seen.add(coinKey(t.pair));
+      await saveSeen(s.id, seen);
+      logPicks(ranked, `/${s.id} ${s.name}`).catch(console.error);
+
+      const hp = hpDropped > 0 ? ` · dropped ${hpDropped} honeypot-smelling` : "";
+      await ctx.reply(
+        formatReply(ranked, `🎯 ${s.name} — new hits only, never repeated${hp}:`),
+        {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+        }
+      );
+    } catch (err) {
+      console.error(err);
+      await ctx.reply("api hiccup, run it back in a sec");
+    }
+  });
+}
 
 bot.command("report", async (ctx) => {
   const day = resolveDay(ctx.match ?? "");
@@ -140,31 +240,7 @@ bot.on("message:text", async (ctx) => {
 
     const intent = parseIntent(text);
 
-    // broad feed = DexScreener promoted feeds + (if a chain was named)
-    // GeckoTerminal's new/trending/top pools for that chain — the
-    // latter catches launches minutes old that the boost feeds miss
-    const broadFeed = async (): Promise<TokenPair[]> => {
-      const sources = await Promise.allSettled([
-        freshFeed(),
-        intent.chain ? chainFeed(intent.chain) : Promise.resolve([]),
-      ]);
-      // lowercase keys: DexScreener checksums EVM addresses, Gecko doesn't.
-      // same coin from both sources → merge its signals, keep one entry
-      const byKey = new Map<string, TokenPair>();
-      for (const s of sources) {
-        if (s.status !== "fulfilled") continue;
-        for (const p of s.value) {
-          const prev = byKey.get(coinKey(p));
-          if (prev) {
-            if (p.boosts && !prev.boosts) prev.boosts = p.boosts;
-            if (p.trending) prev.trending = true;
-          } else {
-            byKey.set(coinKey(p), p);
-          }
-        }
-      }
-      return [...byKey.values()];
-    };
+    const broadFeed = () => gatherFeed(intent.chain ? [intent.chain] : []);
 
     const exclude = benched(ctx.chat.id);
 
@@ -219,6 +295,19 @@ bot.on("message:text", async (ctx) => {
     await ctx.reply("api hiccup, run it back in a sec");
   }
 });
+
+// populate Telegram's "/" command menu so everything is discoverable
+bot.api
+  .setMyCommands([
+    { command: "help", description: "all commands" },
+    { command: "strategies", description: "saved strategies + filters" },
+    ...STRATEGIES.map((s) => ({
+      command: s.id,
+      description: `${s.name} — new hits only`,
+    })),
+    { command: "report", description: "score today's picks (with highs)" },
+  ])
+  .catch(console.error);
 
 startPeakWatcher(); // sample logged picks every 5m so /report knows the highs
 bot.start();
