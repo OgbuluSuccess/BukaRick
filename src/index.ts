@@ -10,7 +10,7 @@ import {
   descFor,
   latestTokenProfiles,
 } from "./dexscreener.js";
-import { chainFeed, tokenInfo } from "./geckoterminal.js";
+import { chainFeed, tokenInfo, attachGtScores } from "./geckoterminal.js";
 import type { RankedToken, TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
 import {
@@ -154,6 +154,8 @@ for (const s of STRATEGIES) {
         return;
       }
 
+      await attachGtScores(ranked.map((t) => t.pair));
+
       // retire these permanently for this strategy
       for (const t of ranked) seen.add(coinKey(t.pair));
       await saveSeen(s.id, seen);
@@ -200,6 +202,8 @@ bot.command("narrative", async (ctx) => {
       );
       return;
     }
+
+    await attachGtScores(picks.map((t) => t.pair));
 
     bench(ctx.chat.id, picks);
     logPicks(picks, `/narrative ${chain ?? "all"}`).catch(console.error);
@@ -366,6 +370,8 @@ bot.on("message:text", async (ctx) => {
       );
       return;
     }
+
+    await attachGtScores(ranked.map((t) => t.pair));
 
     bench(ctx.chat.id, ranked);
 

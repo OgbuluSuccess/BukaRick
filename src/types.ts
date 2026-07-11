@@ -31,6 +31,7 @@ export interface TokenPair {
   boosts?: number;          // dexscreener ⚡ total — PAID upvotes
   trending?: boolean;       // on geckoterminal's trending list (organic)
   safety?: SafetyResult;    // honeypot check, attached at rank/card time
+  gtScore?: number;         // geckoterminal 0-100 quality score
   top10Pct?: number;        // % of supply in top 10 wallets — only set
                             // from indexed data, never estimated
   holdersCount?: number;    // total holders, when the explorer knows

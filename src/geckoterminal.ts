@@ -82,6 +82,11 @@ export interface GtTokenInfo {
   gtScore?: number; // GeckoTerminal's 0-100 token quality score
 }
 
+// per-token lookups are rate-limited (~30/min free) — cache hard, and
+// cache misses too so unknown tokens aren't re-asked every scan
+const INFO_TTL_MS = 30 * 60_000;
+const infoCache = new Map<string, { at: number; info: GtTokenInfo | null }>();
+
 /** per-token info lookup — description + GT score, when GT has them */
 export async function tokenInfo(
   chainId: string,
@@ -89,6 +94,18 @@ export async function tokenInfo(
 ): Promise<GtTokenInfo | null> {
   const network = NETWORK[chainId];
   if (!network) return null;
+  const key = `${chainId}:${address.toLowerCase()}`;
+  const hit = infoCache.get(key);
+  if (hit && Date.now() - hit.at < INFO_TTL_MS) return hit.info;
+  const info = await fetchTokenInfo(network, address);
+  infoCache.set(key, { at: Date.now(), info });
+  return info;
+}
+
+async function fetchTokenInfo(
+  network: string,
+  address: string
+): Promise<GtTokenInfo | null> {
   try {
     const res = await fetch(
       `${BASE}/networks/${network}/tokens/${address.toLowerCase()}/info`,
@@ -109,6 +126,25 @@ export async function tokenInfo(
   } catch {
     return null;
   }
+}
+
+/**
+ * Attach 🧬 GT scores (and missing descriptions) to a batch of pairs.
+ * Call on FINAL picks only (≤10 per reply) — each unmatched token is
+ * one GT request, and the free tier allows ~30/min. Cached lookups
+ * and unsupported chains cost nothing; failures just leave the field
+ * unset.
+ */
+export async function attachGtScores(pairs: TokenPair[]): Promise<void> {
+  await Promise.all(
+    pairs.map(async (p) => {
+      if (p.gtScore !== undefined) return;
+      const info = await tokenInfo(p.chainId, p.baseToken.address);
+      if (!info) return;
+      if (info.gtScore !== undefined) p.gtScore = info.gtScore;
+      p.description ??= info.description;
+    })
+  );
 }
 
 async function pools(network: string, path: string): Promise<GtPool[]> {

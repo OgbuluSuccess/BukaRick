@@ -60,6 +60,9 @@ export function formatReply(tokens: RankedToken[], header?: string): string {
       `(${fmtMcap(mcap)}) — ${fmtAge(t.ageMinutes)}, ` +
       `${t.pair.chainId}${tag}\n` +
       `   ${safetyTag(t.pair)} · ` +
+      (t.pair.gtScore !== undefined
+        ? `🧬 ${t.pair.gtScore.toFixed(0)} · `
+        : "") +
       (t.pair.top10Pct !== undefined
         ? `👥 top10 ${t.pair.top10Pct.toFixed(0)}% · `
         : "") +
@@ -247,6 +250,9 @@ export function formatNarrative(
     return (
       `${i + 1}. <b>${esc(t.pair.baseToken.symbol)}</b> ` +
       `(${fmtMcap(mcap)})${age} — ${safetyTag(t.pair)}` +
+      (t.pair.gtScore !== undefined
+        ? ` · 🧬 ${t.pair.gtScore.toFixed(0)}`
+        : "") +
       (t.pair.top10Pct !== undefined
         ? ` · 👥 top10 ${t.pair.top10Pct.toFixed(0)}%`
         : "") +
