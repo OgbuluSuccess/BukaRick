@@ -3,6 +3,8 @@ export type SafetyStatus = "honeypot" | "sellable" | "unverified";
 export interface SafetyResult {
   status: SafetyStatus;
   reasons: string[];        // specifics, e.g. "sell tax 38%", "freeze authority live"
+  top10Pct?: number;        // rides along free with a GoPlus scan
+  holdersCount?: number;
 }
 
 export interface TokenPair {
@@ -28,6 +30,9 @@ export interface TokenPair {
   boosts?: number;          // dexscreener ⚡ total — PAID upvotes
   trending?: boolean;       // on geckoterminal's trending list (organic)
   safety?: SafetyResult;    // honeypot check, attached at rank/card time
+  top10Pct?: number;        // % of supply in top 10 wallets — only set
+                            // from indexed data, never estimated
+  holdersCount?: number;    // total holders, when the explorer knows
   info?: {
     imageUrl?: string;        // token logo
     header?: string;          // banner image (1500x500)

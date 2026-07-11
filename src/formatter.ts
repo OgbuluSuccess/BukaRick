@@ -38,6 +38,9 @@ export function formatReply(tokens: RankedToken[], header?: string): string {
       `(${fmtMcap(mcap)}) — ${fmtAge(t.ageMinutes)}, ` +
       `${t.pair.chainId}${tag}\n` +
       `   ${safetyTag(t.pair)} · ` +
+      (t.pair.top10Pct !== undefined
+        ? `👥 top10 ${t.pair.top10Pct.toFixed(0)}% · `
+        : "") +
       `vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
       `${social}${links.join(" · ")}`
     );
@@ -259,8 +262,11 @@ export function formatTokenCard(
   }
   if (meta.length) lines.push(meta.join(" · "));
 
-  if (holders) {
-    lines.push(`👥 top10 hold ${holders.top10Pct.toFixed(0)}% of supply`);
+  const top10 = holders?.top10Pct ?? p.top10Pct;
+  if (top10 !== undefined) {
+    const count =
+      p.holdersCount !== undefined ? `${p.holdersCount} holders · ` : "";
+    lines.push(`👥 ${count}top10 hold ${top10.toFixed(0)}% of supply`);
   }
 
   const social: string[] = [];
@@ -313,14 +319,15 @@ function verdict(
   const green: string[] = [];
   const tx1 = p.txns?.h1;
   const chg24 = p.priceChange?.h24 ?? 0;
+  const top10 = holders?.top10Pct ?? p.top10Pct;
 
   if (p.safety?.status === "honeypot") {
     red.push(`honeypot signs — ${p.safety.reasons[0]}`);
   }
   if (liq < 5_000) red.push("liq is dust — you can't exit");
   if (mcap > 0 && liq / mcap < 0.02) red.push("paper-thin liq vs mcap");
-  if (holders && holders.top10Pct > 40)
-    red.push(`insiders hold ${holders.top10Pct.toFixed(0)}%`);
+  if (top10 !== undefined && top10 > 60)
+    red.push(`insiders hold ${top10.toFixed(0)}%`);
   if (chg24 >= 300) red.push(`already ran ${fmtPct(chg24)} — chase risk`);
   if (tx1 && tx1.buys + tx1.sells >= 20 && tx1.buys / Math.max(tx1.sells, 1) < 0.7)
     red.push("sellers in control rn");
@@ -328,7 +335,7 @@ function verdict(
   if (tx1 && tx1.buys + tx1.sells >= 20 && tx1.buys / Math.max(tx1.sells, 1) >= 2)
     green.push("real buy pressure");
   if (mcap > 0 && liq / mcap > 0.15) green.push("healthy liq depth");
-  if (holders && holders.top10Pct < 20) green.push("clean distribution");
+  if (top10 !== undefined && top10 < 20) green.push("clean distribution");
 
   if (red.length)
     return `⚠️ <i>${red.join(" · ")}. tread carefully.</i>`;

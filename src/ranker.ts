@@ -96,40 +96,51 @@ export async function filterAndRank(
     .sort((a, b) => b.score - a.score)
     .slice(0, intent.count * 2);
 
-  // ---- stage 2: holder concentration + honeypot check (parallel) ----
-  const [safety] = await Promise.all([
-    checkSafetyBatch(shortlist.map((t) => t.pair)),
-    Promise.all(
-      shortlist.map(async (t) => {
-        const h = await holderConcentration(
-          t.pair.chainId,
-          t.pair.baseToken.address
-        );
-        if (!h) return;
-        if (h.top10Pct > 40) {
-          t.score -= 50; // effectively buries it
-          t.notes.unshift(`top10 hold ${h.top10Pct.toFixed(0)}% — trap risk`);
-        } else if (h.top10Pct < 20) {
-          t.score += 10;
-          t.notes.push("clean distribution");
-        }
-      })
-    ),
-  ]);
+  // ---- stage 2 (shortlist only): honeypot check + holder data ----
+  const safety = await checkSafetyBatch(shortlist.map((t) => t.pair));
 
-  // tag every pick; only confirmed honeypot signs move the ranking —
-  // "unverified" is the normal state of a young coin, never a penalty
-  for (const t of shortlist) {
-    const s = safety.get(
-      `${t.pair.chainId}:${t.pair.baseToken.address.toLowerCase()}`
-    );
-    if (!s) continue;
-    t.pair.safety = s;
-    if (s.status === "honeypot") {
-      t.score -= 100;
-      t.notes.unshift(`🍯 ${s.reasons[0]}`);
-    }
-  }
+  await Promise.all(
+    shortlist.map(async (t) => {
+      // tag every pick; only confirmed honeypot signs move the ranking —
+      // "unverified" is the normal state of a young coin, never a penalty
+      const s = safety.get(
+        `${t.pair.chainId}:${t.pair.baseToken.address.toLowerCase()}`
+      );
+      if (s) {
+        t.pair.safety = s;
+        if (s.status === "honeypot") {
+          t.score -= 100;
+          t.notes.unshift(`🍯 ${s.reasons[0]}`);
+        }
+      }
+
+      // top-10 wallet share: explorer/Helius first, GoPlus scan data
+      // as fallback. no indexed source → undefined → display nothing
+      const h = await holderConcentration(
+        t.pair.chainId,
+        t.pair.baseToken.address,
+        [t.pair.pairAddress]
+      );
+      const top10 = h?.top10Pct ?? s?.top10Pct;
+      const count = h?.holdersCount ?? s?.holdersCount;
+      if (count !== undefined) t.pair.holdersCount = count;
+      if (top10 === undefined) return;
+      t.pair.top10Pct = top10;
+
+      // graded, not binary — microcaps are naturally concentrated and
+      // a runner at 50% must stay visible, just flagged
+      if (top10 > 60) {
+        t.score -= 50;
+        t.notes.unshift(`top10 hold ${top10.toFixed(0)}% — insiders loaded`);
+      } else if (top10 > 40) {
+        t.score -= 10;
+        t.notes.push(`top10 hold ${top10.toFixed(0)}%`);
+      } else if (top10 < 20) {
+        t.score += 10;
+        t.notes.push("clean distribution");
+      }
+    })
+  );
 
   // select the best by score, then present newest → oldest
   // (unknown age = Infinity, sinks to the bottom)

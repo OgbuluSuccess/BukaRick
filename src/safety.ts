@@ -65,6 +65,28 @@ function behavioral(p: TokenPair): SafetyResult {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * GoPlus scans include the top holder list — extract the top-10
+ * wallet share (contracts/pools excluded) so covered chains get the
+ * number without any extra API call. Missing data → undefined,
+ * never a guess.
+ */
+function attachHolderData(r: SafetyResult, d: any): void {
+  const holders = Array.isArray(d.holders) ? d.holders : [];
+  const wallets = holders.filter(
+    (h: any) => h.is_contract !== 1 && h.is_contract !== "1"
+  );
+  if (wallets.length > 0) {
+    const pct = wallets
+      .slice(0, 10)
+      .reduce((s: number, h: any) => s + (parseFloat(h.percent ?? "0") || 0), 0);
+    if (pct > 0) r.top10Pct = pct * 100;
+  }
+  const hc = parseInt(d.holder_count ?? "", 10);
+  if (Number.isFinite(hc) && hc > 0) r.holdersCount = hc;
+}
+
 function fromEvmScan(d: any): SafetyResult {
   const reasons: string[] = [];
   let honeypot = false;
@@ -91,11 +113,14 @@ function fromEvmScan(d: any): SafetyResult {
   if (d.is_mintable === "1") reasons.push("mintable");
   if (d.hidden_owner === "1") reasons.push("hidden owner");
 
-  if (honeypot) return { status: "honeypot", reasons };
-  return {
-    status: "sellable",
-    reasons: reasons.length ? reasons : ["contract scan clean"],
-  };
+  const r: SafetyResult = honeypot
+    ? { status: "honeypot", reasons }
+    : {
+        status: "sellable",
+        reasons: reasons.length ? reasons : ["contract scan clean"],
+      };
+  attachHolderData(r, d);
+  return r;
 }
 
 function fromSolanaScan(d: any): SafetyResult {
@@ -121,11 +146,14 @@ function fromSolanaScan(d: any): SafetyResult {
     reasons.push("transfer hook present");
   }
 
-  if (honeypot) return { status: "honeypot", reasons };
-  return {
-    status: "sellable",
-    reasons: reasons.length ? reasons : ["contract scan clean"],
-  };
+  const r: SafetyResult = honeypot
+    ? { status: "honeypot", reasons }
+    : {
+        status: "sellable",
+        reasons: reasons.length ? reasons : ["contract scan clean"],
+      };
+  attachHolderData(r, d);
+  return r;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

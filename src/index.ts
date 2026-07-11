@@ -213,10 +213,16 @@ bot.on("message:text", async (ctx) => {
       const boostTotal = boosts.get(coinKey(best));
       if (boostTotal) best.boosts = boostTotal;
       const [holders, safety] = await Promise.all([
-        holderConcentration(best.chainId, best.baseToken.address),
+        holderConcentration(
+          best.chainId,
+          best.baseToken.address,
+          pairs.map((p) => p.pairAddress) // exclude every pool of this token
+        ),
         checkSafety(best),
       ]);
       best.safety = safety;
+      best.top10Pct = holders?.top10Pct ?? safety.top10Pct;
+      best.holdersCount = holders?.holdersCount ?? safety.holdersCount;
       const card = formatTokenCard(best, holders, pairs.length);
 
       // banner photo with the card as caption, like Rick; plain text
