@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
-import { parseIntent } from "./parser.js";
+import { parseIntent, resolveChain } from "./parser.js";
 import { parseIntentLLM } from "./intent-llm.js";
+import { narrativePicks } from "./narrative.js";
 import {
   searchPairs,
   freshFeed,
@@ -14,6 +15,7 @@ import {
   formatReply,
   formatTokenCard,
   formatReport,
+  formatNarrative,
   describeIntent,
 } from "./formatter.js";
 import { holderConcentration } from "./holders.js";
@@ -99,6 +101,7 @@ const HELP =
   "/help — this list\n" +
   "/strategies — your saved strategies and what each one hunts\n" +
   STRATEGIES.map((s) => `/${s.id} — run "${s.name}" (never repeats a coin)\n`).join("") +
+  "/narrative robinhood — strongest story coins, any age (socials, promo, trending)\n" +
   "/report — how today's picks did, with each coin's high\n" +
   "/report yesterday · /report 2026-07-09 also work";
 
@@ -168,6 +171,46 @@ for (const s of STRATEGIES) {
     }
   });
 }
+
+// /narrative [chain] — strongest story signals, age deliberately ignored
+bot.command("narrative", async (ctx) => {
+  await ctx.replyWithChatAction("typing");
+  try {
+    const arg = (ctx.match ?? "").trim();
+    const chain = arg ? resolveChain(arg) : undefined;
+    if (arg && !chain) {
+      await ctx.reply(
+        "don't know that chain. try sol, eth, base, bsc, robinhood, tron — " +
+          "or bare /narrative for all chains."
+      );
+      return;
+    }
+
+    let pairs = await gatherFeed(chain ? [chain] : []);
+    if (chain) pairs = pairs.filter((p) => p.chainId === chain);
+
+    const picks = await narrativePicks(pairs, benched(ctx.chat.id), 10);
+    if (picks.length === 0) {
+      await ctx.reply(
+        `no strong narratives on ${chain ?? "any chain"} rn — nothing with ` +
+          "real socials + sustained attention passes the quality floors. " +
+          "run it back later."
+      );
+      return;
+    }
+
+    bench(ctx.chat.id, picks);
+    logPicks(picks, `/narrative ${chain ?? "all"}`).catch(console.error);
+
+    await ctx.reply(formatNarrative(picks, chain ?? "all chains"), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("api hiccup, run it back in a sec");
+  }
+});
 
 bot.command("report", async (ctx) => {
   const day = resolveDay(ctx.match ?? "");
@@ -335,6 +378,7 @@ bot.api
       command: s.id,
       description: `${s.name} — new hits only`,
     })),
+    { command: "narrative", description: "story coins, any age — /narrative <chain>" },
     { command: "report", description: "score today's picks (with highs)" },
   ])
   .catch(console.error);

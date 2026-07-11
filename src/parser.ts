@@ -1,5 +1,22 @@
 import type { QueryIntent } from "./types.js";
 
+const CHAIN_WORDS: Record<string, string> = {
+  sol: "solana", solana: "solana",
+  base: "base", eth: "ethereum", ethereum: "ethereum",
+  bsc: "bsc", bnb: "bsc",
+  robinhood: "robinhood", hood: "robinhood", rh: "robinhood",
+  trc: "tron", tron: "tron",
+};
+
+/** first chain named in the text (word-boundary match), else undefined */
+export function resolveChain(text: string): string | undefined {
+  const t = text.toLowerCase();
+  for (const [word, chainId] of Object.entries(CHAIN_WORDS)) {
+    if (new RegExp(`\\b${word}\\b`).test(t)) return chainId;
+  }
+  return undefined;
+}
+
 /**
  * Zero-LLM parser for the MVP. Regex + keyword matching covers 90% of
  * degen queries. Swap this for an Anthropic API call later if you want
@@ -31,19 +48,8 @@ export function parseIntent(text: string): QueryIntent {
   if (mcapMin) intent.minMcap = usd(mcapMin[1], mcapMin[2]);
 
   // chain: explicit mention wins, otherwise all chains
-  const chains: Record<string, string> = {
-    sol: "solana", solana: "solana",
-    base: "base", eth: "ethereum", ethereum: "ethereum",
-    bsc: "bsc", bnb: "bsc",
-    robinhood: "robinhood", hood: "robinhood",
-    trc: "tron", tron: "tron",
-  };
-  for (const [word, chainId] of Object.entries(chains)) {
-    if (new RegExp(`\\b${word}\\b`).test(t)) {
-      intent.chain = chainId;
-      break;
-    }
-  }
+  const chain = resolveChain(t);
+  if (chain) intent.chain = chain;
 
   // age bounds. minimum: "not less than 1 day old", "at least 2 days",
   // "older than 6h" — maximum: "under 2 days old", "less than 12 hours",

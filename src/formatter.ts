@@ -227,6 +227,37 @@ export function formatReport(r: ReportData): string {
 }
 
 /**
+ * /narrative list — deliberately NO age anywhere: the pull is about
+ * the strength of the story, not how new the coin is.
+ */
+export function formatNarrative(
+  tokens: RankedToken[],
+  chainLabel: string
+): string {
+  const lines = tokens.map((t, i) => {
+    const mcap = t.pair.marketCap ?? t.pair.fdv ?? 0;
+    const links = [`<a href="${t.pair.url}">chart</a>`, ...socialLinks(t.pair)];
+    return (
+      `${i + 1}. <b>${esc(t.pair.baseToken.symbol)}</b> ` +
+      `(${fmtMcap(mcap)}) — ${safetyTag(t.pair)}` +
+      (t.pair.top10Pct !== undefined
+        ? ` · 👥 top10 ${t.pair.top10Pct.toFixed(0)}%`
+        : "") +
+      `\n   📖 ${t.notes.join(" · ")}\n` +
+      `   vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
+      links.join(" · ")
+    );
+  });
+  return [
+    `📖 strong narratives on ${esc(chainLabel)} — story first, age ignored:`,
+    "",
+    ...lines,
+    "",
+    "<i>narratives run longer but still die. size accordingly.</i>",
+  ].join("\n");
+}
+
+/**
  * Rick-style single-token card for a pasted contract address.
  * `holders` comes from the Helius check (Solana only, null elsewhere).
  */
