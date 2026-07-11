@@ -237,19 +237,26 @@ export function formatNarrative(
   const lines = tokens.map((t, i) => {
     const mcap = t.pair.marketCap ?? t.pair.fdv ?? 0;
     const links = [`<a href="${t.pair.url}">chart</a>`, ...socialLinks(t.pair)];
+    const age = Number.isFinite(t.ageMinutes)
+      ? ` — ${fmtAge(t.ageMinutes)}`
+      : "";
+    const desc = t.pair.description
+      ? `\n   📝 <i>${esc(t.pair.description.slice(0, 160))}${t.pair.description.length > 160 ? "…" : ""}</i>`
+      : "";
     return (
       `${i + 1}. <b>${esc(t.pair.baseToken.symbol)}</b> ` +
-      `(${fmtMcap(mcap)}) — ${safetyTag(t.pair)}` +
+      `(${fmtMcap(mcap)})${age} — ${safetyTag(t.pair)}` +
       (t.pair.top10Pct !== undefined
         ? ` · 👥 top10 ${t.pair.top10Pct.toFixed(0)}%`
         : "") +
+      desc +
       `\n   📖 ${t.notes.join(" · ")}\n` +
       `   vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
       links.join(" · ")
     );
   });
   return [
-    `📖 strong narratives on ${esc(chainLabel)} — story first, age ignored:`,
+    `📖 strong narratives on ${esc(chainLabel)} — ranked by story, any age:`,
     "",
     ...lines,
     "",
@@ -325,6 +332,12 @@ export function formatTokenCard(
   if (p.trending) social.push("📈 trending on geckoterminal");
   if (p.boosts) social.push(`⚡ ${p.boosts} boosts (paid promo)`);
   if (social.length) lines.push(social.join(" · "));
+
+  if (p.description) {
+    lines.push(
+      `📝 <i>${esc(p.description.slice(0, 200))}${p.description.length > 200 ? "…" : ""}</i>`
+    );
+  }
 
   if (p.safety) {
     lines.push(`🔐 ${safetyTag(p)} — ${p.safety.reasons.join(" · ")}`);

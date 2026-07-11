@@ -26,6 +26,14 @@ export async function searchPairs(query: string): Promise<TokenPair[]> {
 
 type TokenRef = { chainId: string; tokenAddress: string };
 
+// profile/boost feeds carry the token's "about" text — remember it so
+// pairs (and the CA card) can show the coin's own story
+const descCache = new Map<string, string>();
+
+export function descFor(chainId: string, address: string): string | undefined {
+  return descCache.get(`${chainId}:${address.toLowerCase()}`);
+}
+
 /**
  * All pairs for a pasted contract address — cross-chain lookup.
  * This is the "Rick card" path: paste a CA, get the token.
@@ -42,7 +50,15 @@ export async function pairsForAddress(address: string): Promise<TokenPair[]> {
  * Returns token addresses; you then hydrate them with pair data.
  */
 export async function latestTokenProfiles(): Promise<TokenRef[]> {
-  return get(`/token-profiles/latest/v1`);
+  const profiles = await get<(TokenRef & { description?: string })[]>(
+    `/token-profiles/latest/v1`
+  );
+  for (const p of profiles) {
+    if (p.description) {
+      descCache.set(`${p.chainId}:${p.tokenAddress.toLowerCase()}`, p.description);
+    }
+  }
+  return profiles;
 }
 
 /** Hydrate token addresses into full pair data (30 per call, chunked). */
@@ -59,7 +75,7 @@ export async function pairsForTokens(
   return pairs;
 }
 
-type BoostRef = TokenRef & { totalAmount?: number };
+type BoostRef = TokenRef & { totalAmount?: number; description?: string };
 
 /**
  * ⚡ boost totals by "chain:address" (lowercased). Boosts are PAID
@@ -77,6 +93,9 @@ export async function boostMap(): Promise<Map<string, number>> {
     for (const b of r.value) {
       const key = `${b.chainId}:${b.tokenAddress.toLowerCase()}`;
       map.set(key, Math.max(map.get(key) ?? 0, b.totalAmount ?? 0));
+      if (b.description && !descCache.has(key)) {
+        descCache.set(key, b.description);
+      }
     }
   }
   return map;
@@ -124,6 +143,8 @@ export async function freshFeed(): Promise<TokenPair[]> {
     seen.add(key);
     const b = boosts.get(key);
     if (b) p.boosts = b;
+    const d = descCache.get(key);
+    if (d) p.description = d;
     return true;
   });
 }

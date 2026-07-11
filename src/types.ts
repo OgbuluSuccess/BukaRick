@@ -27,6 +27,7 @@ export interface TokenPair {
   };
   pairCreatedAt?: number;   // unix ms
   url: string;              // dexscreener link
+  description?: string;     // token profile "about" text, when published
   boosts?: number;          // dexscreener ⚡ total — PAID upvotes
   trending?: boolean;       // on geckoterminal's trending list (organic)
   safety?: SafetyResult;    // honeypot check, attached at rank/card time

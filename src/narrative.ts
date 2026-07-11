@@ -1,6 +1,7 @@
 import type { RankedToken, TokenPair } from "./types.js";
-import { pairsForTokens } from "./dexscreener.js";
+import { descFor, pairsForTokens } from "./dexscreener.js";
 import { checkSafetyBatch } from "./safety.js";
+import { llmJson } from "./intent-llm.js";
 
 /**
  * /narrative — coins with a strong STORY, age deliberately ignored.
@@ -67,7 +68,70 @@ export function scoreNarrative(p: TokenPair): NarrativeScore {
     signals.push("net buying 24h");
   }
 
+  if (p.description) {
+    score += 1;
+    signals.push("has a story");
+  }
+
   return { score, signals };
+}
+
+// ---- meme-uniqueness judge (LLM, optional) ----
+
+const JUDGE_SYSTEM = `You judge meme coin concepts for uniqueness. You get a JSON array of coins: {"i": index, "name", "symbol", "description" (may be null)}.
+
+Score each coin:
+- "unique": 0-5. 5 = a genuinely novel meme or story (an actual event, an original concept, a fresh angle). 0-1 = the thousandth generic clone (dog/cat/pepe/elon/baby-X/moon-X with nothing new).
+- "take": a blunt verdict, max 6 words, lowercase.
+
+Judge only the CONCEPT from name/symbol/description. No description = judge the name alone, cap unique at 3.
+
+Respond with ONLY JSON: {"scores":[{"i":0,"unique":3,"take":"..."}]}`;
+
+interface MemeVerdict {
+  unique: number;
+  take: string;
+}
+
+/**
+ * LLM scores how unique each meme/story is (needs DEEPSEEK_API_KEY or
+ * ANTHROPIC_API_KEY). Missing provider or any failure → empty map and
+ * the signal-based ranking stands alone.
+ */
+async function judgeMemes(
+  pairs: TokenPair[]
+): Promise<Map<string, MemeVerdict>> {
+  const out = new Map<string, MemeVerdict>();
+  if (pairs.length === 0) return out;
+
+  const payload = pairs.map((p, i) => ({
+    i,
+    name: p.baseToken.name,
+    symbol: p.baseToken.symbol,
+    description: p.description?.slice(0, 300) ?? null,
+  }));
+
+  const raw = await llmJson(JUDGE_SYSTEM, JSON.stringify(payload));
+  if (!raw) return out;
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      scores?: { i?: number; unique?: number; take?: string }[];
+    };
+    for (const s of parsed.scores ?? []) {
+      if (typeof s.i !== "number" || !pairs[s.i]) continue;
+      const unique = Math.min(Math.max(Number(s.unique) || 0, 0), 5);
+      const take = String(s.take ?? "").slice(0, 60);
+      const p = pairs[s.i];
+      out.set(`${p.chainId}:${p.baseToken.address.toLowerCase()}`, {
+        unique,
+        take,
+      });
+    }
+  } catch {
+    // malformed judge reply — ranking proceeds without it
+  }
+  return out;
 }
 
 /**
@@ -100,6 +164,9 @@ export async function enrichInfo(pairs: TokenPair[]): Promise<TokenPair[]> {
           if (!f) continue;
           p.info = f.info;
           if (f.boosts && !p.boosts) p.boosts = f.boosts;
+        }
+        for (const p of list) {
+          p.description ??= descFor(p.chainId, p.baseToken.address);
         }
       } catch {
         // hydration is best-effort — unhydrated pairs just score lower
@@ -156,8 +223,23 @@ export async function narrativePicks(
     });
   }
 
-  const picks = candidates
+  // judge the top 20 by signals for meme uniqueness, then rank on the
+  // combined score — a fresh concept beats a well-promoted clone
+  const shortlist = candidates
     .sort((a, b) => b.n.score - a.n.score)
+    .slice(0, 20);
+  const verdicts = await judgeMemes(shortlist.map((c) => c.t.pair));
+  for (const c of shortlist) {
+    const v = verdicts.get(
+      `${c.t.pair.chainId}:${c.t.pair.baseToken.address.toLowerCase()}`
+    );
+    if (!v) continue;
+    c.t.score += v.unique * 1.2;
+    c.t.notes.unshift(`🎭 ${v.take} (${v.unique}/5 unique)`);
+  }
+
+  const picks = shortlist
+    .sort((a, b) => b.t.score - a.t.score)
     .slice(0, count)
     .map((c) => c.t);
 

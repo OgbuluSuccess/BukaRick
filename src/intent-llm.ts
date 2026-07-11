@@ -189,6 +189,70 @@ async function parseWithClaude(text: string): Promise<QueryIntent | null> {
   return toIntent(JSON.parse(block.text) as RawIntent);
 }
 
+// ---- generic JSON completion (used by the /narrative meme judge) ----
+
+/**
+ * One-shot "reply with JSON" call on whichever provider is configured.
+ * Returns the raw JSON string, or null when no provider/any failure.
+ */
+export async function llmJson(
+  system: string,
+  user: string,
+  maxTokens = 800
+): Promise<string | null> {
+  const p = provider();
+  if (!p) return null;
+  try {
+    if (p === "deepseek") {
+      const res = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${DEEPSEEK_KEY}`,
+        },
+        body: JSON.stringify({
+          model: process.env.INTENT_MODEL ?? "deepseek-chat",
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0,
+          max_tokens: maxTokens,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) {
+        console.error(`DeepSeek llmJson: HTTP ${res.status}`);
+        return null;
+      }
+      const data = (await res.json()) as {
+        choices?: { message?: { content?: string } }[];
+      };
+      return data.choices?.[0]?.message?.content ?? null;
+    }
+
+    const claude = await getClaude();
+    if (!claude) return null;
+    const response = await claude.messages.create(
+      {
+        model: process.env.INTENT_MODEL ?? "claude-opus-4-8",
+        max_tokens: maxTokens,
+        system,
+        output_config: { effort: "low" },
+        messages: [{ role: "user", content: user }],
+      },
+      { timeout: 20_000 }
+    );
+    if (response.stop_reason === "refusal") return null;
+    const block = response.content.find((b) => b.type === "text");
+    return block && block.type === "text" ? block.text : null;
+  } catch (err) {
+    console.error(`${p} llmJson failed:`, err);
+    return null;
+  }
+}
+
 // ---- entry point ----
 
 export async function parseIntentLLM(

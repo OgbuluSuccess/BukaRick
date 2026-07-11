@@ -7,6 +7,7 @@ import {
   freshFeed,
   pairsForAddress,
   boostMap,
+  descFor,
 } from "./dexscreener.js";
 import { chainFeed } from "./geckoterminal.js";
 import type { RankedToken, TokenPair } from "./types.js";
@@ -261,6 +262,7 @@ bot.on("message:text", async (ctx) => {
       )[0];
       const boostTotal = boosts.get(coinKey(best));
       if (boostTotal) best.boosts = boostTotal;
+      best.description ??= descFor(best.chainId, best.baseToken.address);
       const [holders, safety] = await Promise.all([
         holderConcentration(
           best.chainId,
