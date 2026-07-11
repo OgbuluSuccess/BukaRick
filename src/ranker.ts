@@ -1,5 +1,6 @@
 import type { QueryIntent, RankedToken, TokenPair } from "./types.js";
 import { holderConcentration } from "./holders.js";
+import { checkSafetyBatch } from "./safety.js";
 
 /**
  * Two-stage: cheap filters + scoring first, then the Helius holder
@@ -95,23 +96,40 @@ export async function filterAndRank(
     .sort((a, b) => b.score - a.score)
     .slice(0, intent.count * 2);
 
-  // ---- stage 2: holder concentration (Solana, parallel) ----
-  await Promise.all(
-    shortlist.map(async (t) => {
-      const h = await holderConcentration(
-        t.pair.chainId,
-        t.pair.baseToken.address
-      );
-      if (!h) return;
-      if (h.top10Pct > 40) {
-        t.score -= 50; // effectively buries it
-        t.notes.unshift(`top10 hold ${h.top10Pct.toFixed(0)}% — trap risk`);
-      } else if (h.top10Pct < 20) {
-        t.score += 10;
-        t.notes.push("clean distribution");
-      }
-    })
-  );
+  // ---- stage 2: holder concentration + honeypot check (parallel) ----
+  const [safety] = await Promise.all([
+    checkSafetyBatch(shortlist.map((t) => t.pair)),
+    Promise.all(
+      shortlist.map(async (t) => {
+        const h = await holderConcentration(
+          t.pair.chainId,
+          t.pair.baseToken.address
+        );
+        if (!h) return;
+        if (h.top10Pct > 40) {
+          t.score -= 50; // effectively buries it
+          t.notes.unshift(`top10 hold ${h.top10Pct.toFixed(0)}% — trap risk`);
+        } else if (h.top10Pct < 20) {
+          t.score += 10;
+          t.notes.push("clean distribution");
+        }
+      })
+    ),
+  ]);
+
+  // tag every pick; only confirmed honeypot signs move the ranking —
+  // "unverified" is the normal state of a young coin, never a penalty
+  for (const t of shortlist) {
+    const s = safety.get(
+      `${t.pair.chainId}:${t.pair.baseToken.address.toLowerCase()}`
+    );
+    if (!s) continue;
+    t.pair.safety = s;
+    if (s.status === "honeypot") {
+      t.score -= 100;
+      t.notes.unshift(`🍯 ${s.reasons[0]}`);
+    }
+  }
 
   // select the best by score, then present newest → oldest
   // (unknown age = Infinity, sinks to the bottom)

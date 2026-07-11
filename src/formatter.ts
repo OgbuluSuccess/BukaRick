@@ -37,7 +37,8 @@ export function formatReply(tokens: RankedToken[], header?: string): string {
       `${i + 1}. <b>${esc(t.pair.baseToken.symbol)}</b> ` +
       `(${fmtMcap(mcap)}) — ${fmtAge(t.ageMinutes)}, ` +
       `${t.pair.chainId}${tag}\n` +
-      `   vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
+      `   ${safetyTag(t.pair)} · ` +
+      `vol/mcap: ${t.volToMcap.toFixed(2)} ${volSignal(t.volToMcap)} · ` +
       `${social}${links.join(" · ")}`
     );
   });
@@ -59,6 +60,18 @@ function fmtPct(n: number | undefined): string {
   // DexScreener omits timeframes with no trades — show "?" not NaN
   if (n === undefined) return "?";
   return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+/** compact honeypot tag — every pull shows one of these three states */
+function safetyTag(p: TokenPair): string {
+  switch (p.safety?.status) {
+    case "honeypot":
+      return "🍯 honeypot?";
+    case "sellable":
+      return "🛡 sellable";
+    default:
+      return "❓ unverified";
+  }
 }
 
 /** website/twitter/telegram links, when the pair data carries them */
@@ -255,6 +268,10 @@ export function formatTokenCard(
   if (p.boosts) social.push(`⚡ ${p.boosts} boosts (paid promo)`);
   if (social.length) lines.push(social.join(" · "));
 
+  if (p.safety) {
+    lines.push(`🔐 ${safetyTag(p)} — ${p.safety.reasons.join(" · ")}`);
+  }
+
   lines.push(`📋 CA: <code>${esc(p.baseToken.address)}</code>`);
 
   lines.push("");
@@ -297,6 +314,9 @@ function verdict(
   const tx1 = p.txns?.h1;
   const chg24 = p.priceChange?.h24 ?? 0;
 
+  if (p.safety?.status === "honeypot") {
+    red.push(`honeypot signs — ${p.safety.reasons[0]}`);
+  }
   if (liq < 5_000) red.push("liq is dust — you can't exit");
   if (mcap > 0 && liq / mcap < 0.02) red.push("paper-thin liq vs mcap");
   if (holders && holders.top10Pct > 40)

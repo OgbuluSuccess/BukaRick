@@ -1,3 +1,10 @@
+export type SafetyStatus = "honeypot" | "sellable" | "unverified";
+
+export interface SafetyResult {
+  status: SafetyStatus;
+  reasons: string[];        // specifics, e.g. "sell tax 38%", "freeze authority live"
+}
+
 export interface TokenPair {
   chainId: string;          // "solana", "base", "ethereum", "bsc"...
   dexId?: string;           // "uniswap", "raydium"...
@@ -20,6 +27,7 @@ export interface TokenPair {
   url: string;              // dexscreener link
   boosts?: number;          // dexscreener ⚡ total — PAID upvotes
   trending?: boolean;       // on geckoterminal's trending list (organic)
+  safety?: SafetyResult;    // honeypot check, attached at rank/card time
   info?: {
     imageUrl?: string;        // token logo
     header?: string;          // banner image (1500x500)

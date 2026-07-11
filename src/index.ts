@@ -11,6 +11,7 @@ import type { RankedToken, TokenPair } from "./types.js";
 import { filterAndRank } from "./ranker.js";
 import { formatReply, formatTokenCard, formatReport } from "./formatter.js";
 import { holderConcentration } from "./holders.js";
+import { checkSafety } from "./safety.js";
 import {
   logPicks,
   buildReport,
@@ -211,10 +212,11 @@ bot.on("message:text", async (ctx) => {
       )[0];
       const boostTotal = boosts.get(coinKey(best));
       if (boostTotal) best.boosts = boostTotal;
-      const holders = await holderConcentration(
-        best.chainId,
-        best.baseToken.address
-      );
+      const [holders, safety] = await Promise.all([
+        holderConcentration(best.chainId, best.baseToken.address),
+        checkSafety(best),
+      ]);
+      best.safety = safety;
       const card = formatTokenCard(best, holders, pairs.length);
 
       // banner photo with the card as caption, like Rick; plain text
