@@ -2,21 +2,36 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { QueryIntent } from "./types.js";
 
 /**
- * Claude-powered intent parsing — understands ANY phrasing ("less than
+ * LLM-powered intent parsing — understands ANY phrasing ("less than
  * 12k market cap, not less than 1 day old"), where the regex parser
- * only knows fixed patterns. Structured outputs guarantee the reply is
- * valid JSON matching the schema.
+ * only knows fixed patterns.
  *
- * Optional: activates when ANTHROPIC_API_KEY is set in .env. Without a
- * key (or on any failure) this returns null and the bot falls back to
- * the regex parser, so it never blocks a reply.
+ * Two providers, picked by which key exists in .env:
+ *   DEEPSEEK_API_KEY  → DeepSeek (deepseek-chat, JSON mode) — cheapest
+ *   ANTHROPIC_API_KEY → Claude (structured outputs, schema-guaranteed)
+ * INTENT_PROVIDER=deepseek|claude forces one when both keys are set.
+ * INTENT_MODEL overrides the model of the chosen provider.
+ *
+ * Any failure returns null and the bot falls back to the regex
+ * parser, so a reply is never blocked on an LLM.
  */
 
-const MODEL = process.env.INTENT_MODEL ?? "claude-opus-4-8";
+const DEEPSEEK_KEY = process.env.DEEPSEEK_API_KEY;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
-const client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+function provider(): "deepseek" | "claude" | null {
+  const forced = process.env.INTENT_PROVIDER;
+  if (forced === "deepseek") return DEEPSEEK_KEY ? "deepseek" : null;
+  if (forced === "claude") return ANTHROPIC_KEY ? "claude" : null;
+  if (DEEPSEEK_KEY) return "deepseek"; // cheapest wins by default
+  if (ANTHROPIC_KEY) return "claude";
+  return null;
+}
 
 const SYSTEM = `You convert casual degen crypto Telegram messages into a JSON coin filter.
+
+Respond with ONLY a JSON object with exactly these keys (use null for anything the user did not express):
+{"chain": "solana"|"ethereum"|"base"|"bsc"|"robinhood"|"tron"|null, "maxMcap": number|null, "minMcap": number|null, "maxAgeHours": number|null, "minAgeHours": number|null, "count": number, "keyword": string|null}
 
 Rules:
 - chain: only if the message names one. "Robinhood" means the Robinhood chain.
@@ -25,6 +40,86 @@ Rules:
 - count: how many coins they want (cap at 20). Default 10.
 - keyword: a theme or ticker to search for, including "coins like NAVEN" (keyword NAVEN). null if they just want a filtered scan.
 - Never invent a filter the user did not express.`;
+
+interface RawIntent {
+  chain?: string | null;
+  maxMcap?: number | string | null;
+  minMcap?: number | string | null;
+  maxAgeHours?: number | string | null;
+  minAgeHours?: number | string | null;
+  count?: number | string | null;
+  keyword?: string | null;
+}
+
+const CHAINS = new Set([
+  "solana",
+  "ethereum",
+  "base",
+  "bsc",
+  "robinhood",
+  "tron",
+]);
+
+/** defensive mapping — tolerates strings-for-numbers and junk fields */
+function toIntent(raw: RawIntent): QueryIntent {
+  const num = (v: number | string | null | undefined): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  const intent: QueryIntent = {
+    count: Math.min(Math.max(Math.round(num(raw.count) ?? 10), 1), 20),
+  };
+  if (raw.chain && CHAINS.has(raw.chain)) intent.chain = raw.chain;
+  const maxMcap = num(raw.maxMcap);
+  const minMcap = num(raw.minMcap);
+  const maxAge = num(raw.maxAgeHours);
+  const minAge = num(raw.minAgeHours);
+  if (maxMcap) intent.maxMcap = maxMcap;
+  if (minMcap) intent.minMcap = minMcap;
+  if (maxAge) intent.maxAgeHours = maxAge;
+  if (minAge) intent.minAgeHours = minAge;
+  if (raw.keyword && typeof raw.keyword === "string") {
+    intent.keyword = raw.keyword.slice(0, 32);
+  }
+  return intent;
+}
+
+// ---- DeepSeek (OpenAI-compatible, JSON mode) ----
+
+async function parseWithDeepSeek(text: string): Promise<QueryIntent | null> {
+  const res = await fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${DEEPSEEK_KEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.INTENT_MODEL ?? "deepseek-chat",
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: text },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 300,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    console.error(`DeepSeek intent parse: HTTP ${res.status}`);
+    return null;
+  }
+  const data = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) return null;
+  return toIntent(JSON.parse(content) as RawIntent);
+}
+
+// ---- Claude (structured outputs — reply is schema-guaranteed) ----
+
+const claude = ANTHROPIC_KEY ? new Anthropic() : null;
 
 const SCHEMA = {
   type: "object",
@@ -57,58 +152,41 @@ const SCHEMA = {
   },
 } as const;
 
+async function parseWithClaude(text: string): Promise<QueryIntent | null> {
+  if (!claude) return null;
+  const response = await claude.messages.create(
+    {
+      model: process.env.INTENT_MODEL ?? "claude-opus-4-8",
+      max_tokens: 500,
+      system: SYSTEM,
+      output_config: {
+        effort: "low",
+        format: { type: "json_schema", schema: SCHEMA },
+      },
+      messages: [{ role: "user", content: text }],
+    },
+    { timeout: 15_000 }
+  );
+  if (response.stop_reason === "refusal") return null;
+  const block = response.content.find((b) => b.type === "text");
+  if (!block || block.type !== "text") return null;
+  return toIntent(JSON.parse(block.text) as RawIntent);
+}
+
+// ---- entry point ----
+
 export async function parseIntentLLM(
   text: string
 ): Promise<QueryIntent | null> {
-  if (!client) return null;
-
+  const p = provider();
+  if (!p) return null;
   try {
-    const response = await client.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 500,
-        system: SYSTEM,
-        output_config: {
-          effort: "low",
-          format: {
-            type: "json_schema",
-            schema: SCHEMA,
-          },
-        },
-        messages: [{ role: "user", content: text }],
-      },
-      { timeout: 15_000 }
-    );
-
-    if (response.stop_reason === "refusal") return null;
-    const block = response.content.find((b) => b.type === "text");
-    if (!block || block.type !== "text") return null;
-
-    const raw = JSON.parse(block.text) as {
-      chain: string | null;
-      maxMcap: number | null;
-      minMcap: number | null;
-      maxAgeHours: number | null;
-      minAgeHours: number | null;
-      count: number;
-      keyword: string | null;
-    };
-
-    const intent: QueryIntent = {
-      count: Math.min(Math.max(raw.count || 10, 1), 20),
-    };
-    if (raw.chain) intent.chain = raw.chain;
-    if (raw.maxMcap != null && raw.maxMcap > 0) intent.maxMcap = raw.maxMcap;
-    if (raw.minMcap != null && raw.minMcap > 0) intent.minMcap = raw.minMcap;
-    if (raw.maxAgeHours != null && raw.maxAgeHours > 0)
-      intent.maxAgeHours = raw.maxAgeHours;
-    if (raw.minAgeHours != null && raw.minAgeHours > 0)
-      intent.minAgeHours = raw.minAgeHours;
-    if (raw.keyword) intent.keyword = raw.keyword;
-    return intent;
+    return p === "deepseek"
+      ? await parseWithDeepSeek(text)
+      : await parseWithClaude(text);
   } catch (err) {
-    // any failure (rate limit, network, bad JSON) → regex fallback
-    console.error("LLM intent parse failed:", err);
+    // rate limit, network, bad JSON — regex fallback takes over
+    console.error(`${p} intent parse failed:`, err);
     return null;
   }
 }
