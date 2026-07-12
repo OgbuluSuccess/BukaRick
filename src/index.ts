@@ -129,8 +129,9 @@ for (const s of STRATEGIES) {
     await ctx.replyWithChatAction("typing");
     try {
       const seen = await loadSeen(s.id);
-      let pairs = await gatherFeed(s.chains ?? []);
+      let pairs = await gatherFeed(s.chains ?? s.feedChains ?? []);
       if (s.chains) pairs = pairs.filter((p) => s.chains!.includes(p.chainId));
+      if (s.prefilter) pairs = await s.prefilter(pairs);
       if (s.minVolToMcap) {
         pairs = pairs.filter((p) => {
           const mcap = p.marketCap ?? p.fdv ?? 0;
@@ -155,6 +156,11 @@ for (const s of STRATEGIES) {
       }
 
       await attachGtScores(ranked.map((t) => t.pair));
+
+      // a prefilter's verdict (e.g. "original — cloned 9x") leads the line
+      for (const t of ranked) {
+        if (t.pair.strategyNote) t.notes.unshift(t.pair.strategyNote);
+      }
 
       // retire these permanently for this strategy
       for (const t of ranked) seen.add(coinKey(t.pair));

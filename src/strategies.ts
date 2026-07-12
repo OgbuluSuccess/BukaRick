@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { QueryIntent, TokenPair } from "./types.js";
 import { behavioral } from "./safety.js";
+import { narrativeOriginals } from "./originals.js";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 
@@ -18,9 +19,14 @@ export interface Strategy {
   name: string;
   description: string;     // shown by /strategies — say what it hunts
   chains?: string[];       // dexscreener chainIds; omit = all chains
+  feedChains?: string[];   // extra per-chain feeds to pull when the
+                           // strategy itself is all-chain
   intent: QueryIntent;     // mcap/age/count gates for the ranker
   minVolToMcap?: number;   // volume-first gate on top of the ranker's
   noHoneypot?: boolean;    // drop coins nobody has managed to sell
+  prefilter?: (pairs: TokenPair[]) => Promise<TokenPair[]> | TokenPair[];
+                           // custom shaping step (e.g. clone-swarm →
+                           // originals); may set pair.strategyNote
 }
 
 export const STRATEGIES: Strategy[] = [
@@ -35,6 +41,19 @@ export const STRATEGIES: Strategy[] = [
     intent: { count: 8, maxMcap: 500_000, maxAgeHours: 48 },
     minVolToMcap: 1.5,
     noHoneypot: true,
+  },
+  {
+    id: "s2",
+    name: "The Original",
+    description:
+      "all chains · finds tickers launched 3+ times (clone swarm = the " +
+      "narrative is real) and pulls ONLY the original — the oldest launch " +
+      "still holding the deep liquidity. clones with dust pools are the " +
+      "copies. clone count shown as narrative heat. honeypot-screened.",
+    feedChains: ["solana", "ethereum", "base", "bsc", "robinhood", "tron"],
+    intent: { count: 8, maxMcap: 10_000_000 },
+    noHoneypot: true,
+    prefilter: narrativeOriginals,
   },
 ];
 
