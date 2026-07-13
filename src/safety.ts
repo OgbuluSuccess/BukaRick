@@ -1,4 +1,5 @@
 import type { SafetyResult, TokenPair } from "./types.js";
+import { drainerCheck, hasExplorer } from "./drainer.js";
 
 /**
  * Honeypot tagging, two evidence layers:
@@ -258,6 +259,33 @@ export async function checkSafetyBatch(
         out.set(k, r);
       }
     })
+  );
+
+  // explorer-covered chains (robinhood): on-chain drain check — reads
+  // the actual transfer history for wallets robbed in txs they never
+  // signed. this is the layer that catches TOESCOIN-style backdoors
+  // that market data and even contract scanners can't see.
+  await Promise.all(
+    pairs
+      .filter((p) => hasExplorer(p.chainId))
+      .map(async (p) => {
+        const k = keyOf(p);
+        const d = await drainerCheck(p);
+        if (!d || d.verdict === "CLEAR") return;
+        const cur = out.get(k);
+        if (cur && d.reasons[0] && cur.reasons.includes(d.reasons[0])) return;
+        const merged: SafetyResult =
+          d.verdict === "DRAINER"
+            ? { status: "honeypot", reasons: [...d.reasons, ...(cur?.reasons ?? [])] }
+            : {
+                status: cur?.status === "honeypot" ? "honeypot" : "unverified",
+                reasons: [...d.reasons, ...(cur?.reasons ?? [])],
+              };
+        if (cur?.top10Pct !== undefined) merged.top10Pct = cur.top10Pct;
+        if (cur?.holdersCount !== undefined) merged.holdersCount = cur.holdersCount;
+        out.set(k, merged);
+        cache.set(k, { at: Date.now(), result: merged });
+      })
   );
 
   return out;

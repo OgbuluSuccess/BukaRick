@@ -119,6 +119,11 @@ export async function filterAndRank(
         if (s.status === "honeypot") {
           t.score -= 100;
           t.notes.unshift(`🍯 ${s.reasons[0]}`);
+        } else if (s.reasons.some((r) => r.includes("didn't sign"))) {
+          // unsigned-loss warning short of a confirmed drain — keep it
+          // visible and knock it down the board
+          t.score -= 15;
+          t.notes.unshift(`⚠️ ${s.reasons[0]}`);
         }
       }
 
@@ -150,9 +155,13 @@ export async function filterAndRank(
     })
   );
 
+  // confirmed traps never reach the reply — a drained wallet can't be
+  // un-drained, so "buried but visible" isn't good enough
+  const safe = shortlist.filter((t) => t.pair.safety?.status !== "honeypot");
+
   // select the best by score, then present newest → oldest
   // (unknown age = Infinity, sinks to the bottom)
-  return shortlist
+  return safe
     .sort((a, b) => b.score - a.score)
     .slice(0, intent.count)
     .sort((a, b) => a.ageMinutes - b.ageMinutes);
