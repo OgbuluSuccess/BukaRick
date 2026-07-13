@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, type Context } from "grammy";
 import { parseIntent, resolveChain } from "./parser.js";
 import { parseIntentLLM } from "./intent-llm.js";
 import { narrativePicks, judgeMemes } from "./narrative.js";
@@ -37,6 +37,33 @@ import {
 
 // EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
 const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
+
+// telegram rejects messages over 4096 chars with a 400 — split long
+// replies on line boundaries (no HTML entity in our formats spans a
+// newline, so chunks stay valid)
+const TG_LIMIT = 4000;
+async function replyLong(
+  ctx: Context,
+  text: string,
+  extra?: Parameters<Context["reply"]>[1]
+): Promise<void> {
+  if (text.length <= TG_LIMIT) {
+    await ctx.reply(text, extra);
+    return;
+  }
+  let buf: string[] = [];
+  let len = 0;
+  for (const line of text.split("\n")) {
+    if (len + line.length + 1 > TG_LIMIT && buf.length > 0) {
+      await ctx.reply(buf.join("\n"), extra);
+      buf = [];
+      len = 0;
+    }
+    buf.push(line);
+    len += line.length + 1;
+  }
+  if (buf.length > 0) await ctx.reply(buf.join("\n"), extra);
+}
 
 // per-chat rotation: a coin shown to a chat is benched for ROTATION_MS
 // so repeat scans surface the next-best instead of the same list.
@@ -168,7 +195,8 @@ for (const s of STRATEGIES) {
       logPicks(ranked, `/${s.id} ${s.name}`).catch(console.error);
 
       const hp = hpDropped > 0 ? ` · dropped ${hpDropped} honeypot-smelling` : "";
-      await ctx.reply(
+      await replyLong(
+        ctx,
         formatReply(ranked, `🎯 ${s.name} — new hits only, never repeated${hp}:`),
         {
           parse_mode: "HTML",
@@ -214,7 +242,7 @@ bot.command("narrative", async (ctx) => {
     bench(ctx.chat.id, picks);
     logPicks(picks, `/narrative ${chain ?? "all"}`).catch(console.error);
 
-    await ctx.reply(formatNarrative(picks, chain ?? "all chains"), {
+    await replyLong(ctx, formatNarrative(picks, chain ?? "all chains"), {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     });
@@ -237,7 +265,7 @@ bot.command("report", async (ctx) => {
       await ctx.reply(`nothing logged for ${day}. scan something first.`);
       return;
     }
-    await ctx.reply(formatReport(report), {
+    await replyLong(ctx, formatReport(report), {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     });
@@ -387,7 +415,7 @@ bot.on("message:text", async (ctx) => {
     const fullHeader =
       (header ?? "fresh pulls, newest first, filtered by my signals:") +
       `\n${understood}`;
-    await ctx.reply(formatReply(ranked, fullHeader), {
+    await replyLong(ctx, formatReply(ranked, fullHeader), {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     });
