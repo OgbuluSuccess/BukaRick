@@ -179,9 +179,13 @@ export function formatReport(r: ReportData): string {
       parts.push(row.x === null ? "now 💀 gone" : `now ${fmtX(row.x)}`);
       label = parts.join(" · ");
     }
-    const mcapMove = row.now
-      ? `${fmtMcap(e.mcap)} → ${fmtMcap(row.now.mcap)}`
-      : `${fmtMcap(e.mcap)} → ?`;
+    // mcap journey mirrors the x: entry → the high it reached (current
+    // mcap only when no peak was ever sampled)
+    const mcapMove = row.peak
+      ? `${fmtMcap(e.mcap)} → ${fmtMcap(row.peak.mcap)} at the high`
+      : row.now
+        ? `${fmtMcap(e.mcap)} → ${fmtMcap(row.now.mcap)} now`
+        : `${fmtMcap(e.mcap)} → ?`;
     const times = row.sightings > 1 ? ` · seen ${row.sightings}x` : "";
     return (
       `${i + 1}. <b>${esc(e.symbol)}</b> — ${label} (${e.chainId})\n` +

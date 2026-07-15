@@ -55,6 +55,23 @@ export const STRATEGIES: Strategy[] = [
     noHoneypot: true,
     prefilter: narrativeOriginals,
   },
+  {
+    id: "s3",
+    name: "Steady Survivor",
+    description:
+      "all chains · coins that lived 2+ days and still hold a 200k–700k " +
+      "mcap — past the launch-day rug window, before the big discovery. " +
+      "still must be trading real volume (alive, not limping). " +
+      "honeypot-screened.",
+    feedChains: ["solana", "ethereum", "base", "bsc", "robinhood", "tron"],
+    intent: {
+      count: 8,
+      minMcap: 200_000,
+      maxMcap: 700_000,
+      minAgeHours: 48,
+    },
+    noHoneypot: true,
+  },
 ];
 
 /**

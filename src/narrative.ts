@@ -199,6 +199,9 @@ export async function narrativePicks(
     // quality floors — a narrative on a dead pool is a museum piece
     if (mcap < 40_000 || liq < 5_000) continue;
     if (liq / mcap < 0.02) continue;
+    // >1B total supply is out of every pull (fdv / price = supply)
+    const price = parseFloat(p.priceUsd) || 0;
+    if (price > 0 && ((p.fdv ?? mcap) / price) > 1_020_000_000) continue;
     const volToMcap = vol24 / mcap;
     if (volToMcap < 0.5) continue;
 

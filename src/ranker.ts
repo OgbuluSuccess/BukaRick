@@ -43,6 +43,12 @@ export async function filterAndRank(
     if (liq < liqFloor) continue;         // rug floor
     if (liq / mcap < 0.02) continue;      // paper-thin liquidity
 
+    // supply cap: fdv / price = total supply. >1B-supply tokens are
+    // out of every pull (2% tolerance absorbs float noise — the
+    // standard 1B pump.fun supply still passes)
+    const price = parseFloat(p.priceUsd) || 0;
+    if (price > 0 && (p.fdv ?? mcap) / price > 1_020_000_000) continue;
+
     const volToMcap = vol24 / mcap;
     if (volToMcap < 0.5 && ageHours > 2) continue; // no attention, not brand new
 
