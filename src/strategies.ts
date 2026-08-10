@@ -76,15 +76,15 @@ export const STRATEGIES: Strategy[] = [
     id: "s4",
     name: "Solana Survivor",
     description:
-      "solana only · same read as Steady Survivor — coins that lived 2+ " +
-      "days and still hold a 200k–700k mcap, still trading real volume. " +
-      "honeypot-screened.",
+      "solana only · same read as Steady Survivor but a wider band — " +
+      "coins that lived 1+ day and hold a 150k–1M mcap, still trading " +
+      "real volume. honeypot-screened.",
     chains: ["solana"],
     intent: {
       count: 8,
-      minMcap: 200_000,
-      maxMcap: 700_000,
-      minAgeHours: 48,
+      minMcap: 150_000,
+      maxMcap: 1_000_000,
+      minAgeHours: 24,
     },
     noHoneypot: true,
   },
