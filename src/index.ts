@@ -34,6 +34,7 @@ import {
   loadSeen,
   saveSeen,
 } from "./strategies.js";
+import { startAutoPost } from "./scheduler.js";
 
 // EVM (0x + 40 hex) or Solana (base58, 32-44 chars) contract address
 const ADDRESS_RE = /\b(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})\b/;
@@ -150,30 +151,56 @@ bot.command("strategies", (ctx) =>
   )
 );
 
+// core of every /<id> strategy command — pulled out so the scheduler
+// can run the exact same logic without a ctx to reply through. Returns
+// the formatted message, or null when nothing new passes the filter.
+async function runStrategy(id: string): Promise<string | null> {
+  const s = STRATEGIES.find((s) => s.id === id);
+  if (!s) return null;
+
+  const seen = await loadSeen(s.id);
+  let pairs = await gatherFeed(s.chains ?? s.feedChains ?? []);
+  if (s.chains) pairs = pairs.filter((p) => s.chains!.includes(p.chainId));
+  if (s.prefilter) pairs = await s.prefilter(pairs);
+  if (s.minVolToMcap) {
+    pairs = pairs.filter((p) => {
+      const mcap = p.marketCap ?? p.fdv ?? 0;
+      return mcap > 0 && (p.volume?.h24 ?? 0) / mcap >= s.minVolToMcap!;
+    });
+  }
+  let hpDropped = 0;
+  if (s.noHoneypot) {
+    const before = pairs.length;
+    pairs = pairs.filter((p) => !honeypotSmell(p));
+    hpDropped = before - pairs.length;
+  }
+
+  const ranked = await filterAndRank(pairs, s.intent, seen);
+  if (ranked.length === 0) return null;
+
+  await attachGtScores(ranked.map((t) => t.pair));
+
+  // a prefilter's verdict (e.g. "original — cloned 9x") leads the line
+  for (const t of ranked) {
+    if (t.pair.strategyNote) t.notes.unshift(t.pair.strategyNote);
+  }
+
+  // retire these permanently for this strategy
+  for (const t of ranked) seen.add(coinKey(t.pair));
+  await saveSeen(s.id, seen);
+  logPicks(ranked, `/${s.id} ${s.name}`).catch(console.error);
+
+  const hp = hpDropped > 0 ? ` · dropped ${hpDropped} honeypot-smelling` : "";
+  return formatReply(ranked, `🎯 ${s.name} — new hits only, never repeated${hp}:`);
+}
+
 // one command per saved strategy: /s1, /s2, ...
 for (const s of STRATEGIES) {
   bot.command(s.id, async (ctx) => {
     await ctx.replyWithChatAction("typing");
     try {
-      const seen = await loadSeen(s.id);
-      let pairs = await gatherFeed(s.chains ?? s.feedChains ?? []);
-      if (s.chains) pairs = pairs.filter((p) => s.chains!.includes(p.chainId));
-      if (s.prefilter) pairs = await s.prefilter(pairs);
-      if (s.minVolToMcap) {
-        pairs = pairs.filter((p) => {
-          const mcap = p.marketCap ?? p.fdv ?? 0;
-          return mcap > 0 && (p.volume?.h24 ?? 0) / mcap >= s.minVolToMcap!;
-        });
-      }
-      let hpDropped = 0;
-      if (s.noHoneypot) {
-        const before = pairs.length;
-        pairs = pairs.filter((p) => !honeypotSmell(p));
-        hpDropped = before - pairs.length;
-      }
-
-      const ranked = await filterAndRank(pairs, s.intent, seen);
-      if (ranked.length === 0) {
+      const text = await runStrategy(s.id);
+      if (!text) {
         await ctx.reply(
           `🎯 ${s.name}: conditions not satisfied rn — nothing NEW passes ` +
             `the filter. run /${s.id} again later; coins I already showed ` +
@@ -181,34 +208,19 @@ for (const s of STRATEGIES) {
         );
         return;
       }
-
-      await attachGtScores(ranked.map((t) => t.pair));
-
-      // a prefilter's verdict (e.g. "original — cloned 9x") leads the line
-      for (const t of ranked) {
-        if (t.pair.strategyNote) t.notes.unshift(t.pair.strategyNote);
-      }
-
-      // retire these permanently for this strategy
-      for (const t of ranked) seen.add(coinKey(t.pair));
-      await saveSeen(s.id, seen);
-      logPicks(ranked, `/${s.id} ${s.name}`).catch(console.error);
-
-      const hp = hpDropped > 0 ? ` · dropped ${hpDropped} honeypot-smelling` : "";
-      await replyLong(
-        ctx,
-        formatReply(ranked, `🎯 ${s.name} — new hits only, never repeated${hp}:`),
-        {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        }
-      );
+      await replyLong(ctx, text, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
     } catch (err) {
       console.error(err);
       await ctx.reply("api hiccup, run it back in a sec");
     }
   });
 }
+
+// utility: drop the current chat's id, so you can wire AUTO_CHAT_IDS
+bot.command("id", (ctx) => ctx.reply(`chat id: ${ctx.chat.id}`));
 
 // /narrative [chain] — strongest story signals, age deliberately ignored
 bot.command("narrative", async (ctx) => {
@@ -436,9 +448,11 @@ bot.api
     })),
     { command: "narrative", description: "story coins, any age — /narrative <chain>" },
     { command: "report", description: "score today's picks (with highs)" },
+    { command: "id", description: "this chat's id (for AUTO_CHAT_IDS)" },
   ])
   .catch(console.error);
 
 startPeakWatcher(); // sample logged picks every 5m so /report knows the highs
+startAutoPost(bot, runStrategy); // no-op unless AUTO_CHAT_IDS is set
 bot.start();
 console.log("bot running");

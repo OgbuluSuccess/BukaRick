@@ -51,6 +51,28 @@ pm2 logs degen-bot
 
 Then DM your bot on Telegram: `microcaps under 250k, fresh, like 10`
 
+## 6. Auto-post (optional)
+
+By default the bot only replies when someone messages it. To have it drop
+strategy hits into a chat on its own, on a timer:
+
+```bash
+# DM the bot, then send /id to get your personal chat id — or add the
+# bot to a group/channel (as admin, for a channel) and run /id there
+```
+
+Add to `.env`:
+
+```
+AUTO_CHAT_IDS=123456789,-1001234567890   # comma-separated, one or more
+AUTO_INTERVAL_MIN=30                      # default 30
+AUTO_STRATEGIES=s1,s2,s3                  # default: all saved strategies
+```
+
+`pm2 restart degen-bot` to pick it up. It reuses the same "never repeat a
+coin" memory as running `/s1` etc. by hand, so auto-posts and manual runs
+never duplicate each other's picks.
+
 ## Ops notes
 
 - Long polling, so no domain, no webhook, no open ports, no nginx. Works behind NAT.
