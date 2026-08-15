@@ -1,6 +1,7 @@
 import type { TokenPair } from "./types.js";
 import { enrichInfo } from "./narrative.js";
 import { llmJson } from "./intent-llm.js";
+import { holderConcentration } from "./holders.js";
 
 /**
  * /s5 — utility coins: a real product or protocol behind the ticker,
@@ -67,7 +68,11 @@ async function judgeUtility(
   return out;
 }
 
-const MIN_UTILITY_SCORE = 3;
+// 4+ only: the judge is told 2-3 means "plausible but vague/
+// unverifiable" — that tier is explicitly NOT what this strategy is
+// for, so passing it through was the bug, not a borderline call
+const MIN_UTILITY_SCORE = 4;
+const MAX_TOP10_PCT = 50; // insiders holding half supply isn't "utility", it's a rug waiting to happen
 const JUDGE_BUDGET = 20; // cap LLM calls per run, same budget as /narrative
 
 /**
@@ -96,12 +101,27 @@ export async function utilityPicks(pairs: TokenPair[]): Promise<TokenPair[]> {
     .slice(0, JUDGE_BUDGET);
 
   const verdicts = await judgeUtility(shortlist);
-  const picks: TokenPair[] = [];
-  for (const p of shortlist) {
+  const survivors = shortlist.filter((p) => {
     const v = verdicts.get(`${p.chainId}:${p.baseToken.address.toLowerCase()}`);
-    if (!v || v.utility < MIN_UTILITY_SCORE) continue;
+    if (!v || v.utility < MIN_UTILITY_SCORE) return false;
     p.strategyNote = `🔧 ${v.take} (${v.utility}/5 utility)`;
-    picks.push(p);
-  }
+    return true;
+  });
+
+  // holder concentration: only Solana (Helius) and Robinhood
+  // (Blockscout) are indexed — other chains skip this gate rather
+  // than penalize a coin for a check we can't run, same rule the
+  // ranker uses elsewhere
+  const picks: TokenPair[] = [];
+  await Promise.all(
+    survivors.map(async (p) => {
+      const h = await holderConcentration(p.chainId, p.baseToken.address, [
+        p.pairAddress,
+      ]);
+      if (h && h.top10Pct > MAX_TOP10_PCT) return; // insiders own it — drop
+      if (h) p.top10Pct = h.top10Pct;
+      picks.push(p);
+    })
+  );
   return picks;
 }
