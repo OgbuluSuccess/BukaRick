@@ -1,5 +1,5 @@
 import type { QueryIntent, RankedToken, TokenPair } from "./types.js";
-import type { ReportData } from "./tracker.js";
+import type { LearningBucket, LearningReport, ReportData } from "./tracker.js";
 import type { MemeVerdict } from "./narrative.js";
 
 function fmtMcap(n: number): string {
@@ -273,6 +273,52 @@ export function formatNarrative(
     "",
     "<i>narratives run longer but still die. size accordingly.</i>",
   ].join("\n");
+}
+
+/**
+ * /learn — which signal tags and which strategies actually preceded a
+ * ≥2x outcome, across every pick ever logged. Diagnostic only: read
+ * it, then tune a strategy's gates by hand (like /s4's minVolToMcap).
+ */
+export function formatLearning(r: LearningReport): string {
+  if (r.totalPicks === 0) {
+    return (
+      "nothing logged yet — run some strategies (or let auto-post run " +
+      "a while) then /learn again once picks build up."
+    );
+  }
+
+  const pct = (n: number | null) => (n === null ? "?" : `${(n * 100).toFixed(0)}%`);
+  const fmtBucket = (b: LearningBucket, i: number) =>
+    `${i + 1}. <b>${esc(b.label)}</b> — ${pct(b.winRate)} hit ≥2x ` +
+    `(${b.known}/${b.count} priced)` +
+    (b.medianX !== null ? `, median ${b.medianX.toFixed(2)}x` : "");
+
+  const lines = [
+    `🧠 <b>learning report</b> — ${r.totalPicks} picks across ${r.days} days`,
+    `overall: ${pct(r.overallHitRate)} of priced picks hit ≥2x`,
+    "",
+    "<i>peak tracking only actively samples the last 2 days — older " +
+      "picks fall back to current price, which can UNDERSTATE a coin " +
+      "that already pumped and dumped. diagnostic only, nothing here " +
+      "changes a filter automatically.</i>",
+    "",
+    "<b>by signal</b> (min 3 samples, best hit rate first):",
+  ];
+  if (r.signalBuckets.length === 0) {
+    lines.push("not enough samples yet for any tag to clear the floor.");
+  } else {
+    lines.push(...r.signalBuckets.slice(0, 12).map(fmtBucket));
+  }
+
+  lines.push("", "<b>by strategy</b>:");
+  if (r.strategyBuckets.length === 0) {
+    lines.push("not enough samples yet.");
+  } else {
+    lines.push(...r.strategyBuckets.map(fmtBucket));
+  }
+
+  return lines.join("\n");
 }
 
 /**

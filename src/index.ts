@@ -18,6 +18,7 @@ import {
   formatTokenCard,
   formatReport,
   formatNarrative,
+  formatLearning,
   describeIntent,
 } from "./formatter.js";
 import { holderConcentration } from "./holders.js";
@@ -25,6 +26,7 @@ import { checkSafety } from "./safety.js";
 import {
   logPicks,
   buildReport,
+  buildLearningReport,
   resolveDay,
   startPeakWatcher,
 } from "./tracker.js";
@@ -133,7 +135,8 @@ const HELP =
   STRATEGIES.map((s) => `/${s.id} — run "${s.name}" (never repeats a coin)\n`).join("") +
   "/narrative robinhood — strongest story coins, any age (socials, promo, trending)\n" +
   "/report — how today's picks did, with each coin's high\n" +
-  "/report yesterday · /report 2026-07-09 also work";
+  "/report yesterday · /report 2026-07-09 also work\n" +
+  "/learn — which signals actually preceded a ≥2x pick, across everything logged";
 
 bot.command(["start", "help"], (ctx) => ctx.reply(HELP));
 
@@ -284,6 +287,20 @@ bot.command("report", async (ctx) => {
   } catch (err) {
     console.error(err);
     await ctx.reply("couldn't build the report, run it back in a sec");
+  }
+});
+
+bot.command("learn", async (ctx) => {
+  await ctx.replyWithChatAction("typing");
+  try {
+    const report = await buildLearningReport();
+    await replyLong(ctx, formatLearning(report), {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  } catch (err) {
+    console.error(err);
+    await ctx.reply("couldn't build the learning report, run it back in a sec");
   }
 });
 
@@ -448,6 +465,7 @@ bot.api
     })),
     { command: "narrative", description: "story coins, any age — /narrative <chain>" },
     { command: "report", description: "score today's picks (with highs)" },
+    { command: "learn", description: "which signals actually precede a 2x, all-time" },
     { command: "id", description: "this chat's id (for AUTO_CHAT_IDS)" },
   ])
   .catch(console.error);

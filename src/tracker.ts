@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RankedToken, TokenPair } from "./types.js";
 import { pairsForTokens } from "./dexscreener.js";
@@ -309,4 +309,187 @@ export async function buildReport(day: string): Promise<ReportData | null> {
   });
 
   return { day, totalSightings: entries.length, rows };
+}
+
+// ---- /learn: which signals actually preceded a winner ----
+
+async function listPickDays(): Promise<string[]> {
+  try {
+    const files = await readdir(DATA_DIR);
+    return files
+      .filter((f) => /^picks-\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+      .map((f) => f.slice(6, 16))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Signal tags a pick carried at the moment it was shown — same
+ * vocabulary as the ranker's own notes, bucketed so "top10 hold 27%"
+ * and "top10 hold 33%" count as the same tag.
+ */
+function classify(e: PickEntry): string[] {
+  const tags: string[] = [];
+
+  if (e.volToMcap >= 3) tags.push("vol/mcap ≥3 (blazing)");
+  else if (e.volToMcap >= 1) tags.push("vol/mcap 1-3 (hot)");
+  else if (e.volToMcap >= 0.5) tags.push("vol/mcap 0.5-1 (warm)");
+  else tags.push("vol/mcap <0.5 (quiet)");
+
+  if (e.ageMinutes < 90) tags.push("age <90m");
+  else if (e.ageMinutes < 1440) tags.push("age <1d");
+  else if (e.ageMinutes < 2880) tags.push("age 1-2d");
+  else tags.push("age 2d+");
+
+  for (const n of e.notes) {
+    if (n.includes("trending on gecko")) tags.push("trending (gecko)");
+    if (n.includes("insiders loaded")) tags.push("top10 >60% (insiders)");
+    else if (n.startsWith("top10 hold")) tags.push("top10 40-60%");
+    if (n.includes("clean distribution")) tags.push("top10 <20% (clean)");
+    if (n.startsWith("buy pressure")) tags.push("buy pressure ≥2x");
+    if (n.includes("sellers in control")) tags.push("sellers in control");
+    if (n === "momentum") tags.push("momentum (+5-100% 1h)");
+    if (n.includes("already ran")) tags.push("already ran (≥100% 1h)");
+    if (n.includes("healthy liq")) tags.push("healthy liq depth (>15%)");
+    if (n.includes("heavy volume vs mcap")) tags.push("vol/mcap >2 (ranker flag)");
+    if (n.startsWith("original")) tags.push("clone-swarm original");
+    if (n.includes("🍯")) tags.push("honeypot-flagged");
+    if (n.includes("⚠️")) tags.push("unsigned-loss warning");
+  }
+  return tags;
+}
+
+export interface LearningBucket {
+  label: string;
+  count: number;
+  known: number;          // samples where an outcome could be priced
+  winRate: number | null; // fraction of `known` that hit ≥2x
+  medianX: number | null;
+}
+
+export interface LearningReport {
+  days: number;
+  totalPicks: number;
+  overallHitRate: number | null;
+  signalBuckets: LearningBucket[];
+  strategyBuckets: LearningBucket[];
+}
+
+interface Sample {
+  tags: string[];
+  strategyTag: string;
+  x: number | null; // best known multiple vs entry price
+}
+
+function aggregate(
+  samples: Sample[],
+  keyOf: (s: Sample) => string[]
+): LearningBucket[] {
+  const map = new Map<
+    string,
+    { count: number; hits: number; known: number; xs: number[] }
+  >();
+  for (const s of samples) {
+    for (const label of keyOf(s)) {
+      const b = map.get(label) ?? { count: 0, hits: 0, known: 0, xs: [] };
+      b.count++;
+      if (s.x !== null) {
+        b.known++;
+        b.xs.push(s.x);
+        if (s.x >= 2) b.hits++;
+      }
+      map.set(label, b);
+    }
+  }
+  return [...map.entries()]
+    .map(([label, b]) => {
+      const sorted = [...b.xs].sort((a, c) => a - c);
+      const medianX = sorted.length
+        ? sorted[Math.floor(sorted.length / 2)]
+        : null;
+      return {
+        label,
+        count: b.count,
+        known: b.known,
+        winRate: b.known > 0 ? b.hits / b.known : null,
+        medianX,
+      };
+    })
+    .filter((b) => b.count >= 3)
+    .sort((a, b) => (b.winRate ?? -1) - (a.winRate ?? -1));
+}
+
+/**
+ * Scans every day of picks ever logged and reports which signal tags
+ * (and which strategies) actually preceded a ≥2x outcome. Peak
+ * tracking only actively samples the last 2 days (startPeakWatcher
+ * only revisits today/yesterday) — for older days this falls back to
+ * a live re-price, which can UNDERSTATE a coin that already pumped
+ * and dumped before you asked. Diagnostic only: nothing here changes
+ * a strategy's filters automatically.
+ */
+export async function buildLearningReport(): Promise<LearningReport> {
+  const days = await listPickDays();
+  const samples: Sample[] = [];
+
+  for (const day of days) {
+    let raw: string;
+    try {
+      raw = await readFile(fileFor(day), "utf8");
+    } catch {
+      continue;
+    }
+    const entries = parseEntries(raw);
+    if (entries.length === 0) continue;
+
+    // first sighting per token per day — later same-day sightings
+    // would just restate the same signal snapshot
+    const byToken = new Map<string, PickEntry>();
+    for (const e of entries) {
+      const k = keyOf(e.chainId, e.tokenAddress);
+      const prev = byToken.get(k);
+      if (!prev || e.at < prev.at) byToken.set(k, e);
+    }
+
+    const peaks = await readPeaks(day);
+    const best = await fetchBest(
+      [...byToken.values()].map((e) => ({
+        chainId: e.chainId,
+        tokenAddress: e.tokenAddress,
+      }))
+    );
+
+    for (const [k, e] of byToken) {
+      if (e.priceUsd <= 0) continue;
+      const pk = peaks[k];
+      const peakX = pk ? pk.price / e.priceUsd : null;
+      const live = best.get(k);
+      const livePrice = live ? parseFloat(live.priceUsd) || 0 : 0;
+      const liveX = livePrice > 0 ? livePrice / e.priceUsd : null;
+      const x =
+        peakX !== null || liveX !== null
+          ? Math.max(peakX ?? 0, liveX ?? 0)
+          : null;
+
+      const strategyTag = e.query.startsWith("/")
+        ? e.query.split(" ")[0]
+        : "manual query";
+      samples.push({ tags: classify(e), strategyTag, x });
+    }
+  }
+
+  const known = samples.filter((s) => s.x !== null);
+  const overallHitRate = known.length
+    ? known.filter((s) => s.x! >= 2).length / known.length
+    : null;
+
+  return {
+    days: days.length,
+    totalPicks: samples.length,
+    overallHitRate,
+    signalBuckets: aggregate(samples, (s) => s.tags),
+    strategyBuckets: aggregate(samples, (s) => [s.strategyTag]),
+  };
 }

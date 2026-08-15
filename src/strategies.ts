@@ -3,6 +3,7 @@ import path from "node:path";
 import type { QueryIntent, TokenPair } from "./types.js";
 import { behavioral } from "./safety.js";
 import { narrativeOriginals } from "./originals.js";
+import { utilityPicks } from "./utility.js";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 
@@ -89,6 +90,19 @@ export const STRATEGIES: Strategy[] = [
     },
     minVolToMcap: 1,
     noHoneypot: true,
+  },
+  {
+    id: "s5",
+    name: "Utility Play",
+    description:
+      "all chains · LLM-judged for a REAL product behind the ticker — " +
+      "protocol, agent, dev tool, working DeFi — not utility-flavored " +
+      "meme language. needs DEEPSEEK_API_KEY or ANTHROPIC_API_KEY " +
+      "configured; finds nothing without one. honeypot-screened.",
+    feedChains: ["solana", "ethereum", "base", "bsc", "robinhood", "tron"],
+    intent: { count: 8, maxMcap: 10_000_000 },
+    noHoneypot: true,
+    prefilter: utilityPicks,
   },
 ];
 
